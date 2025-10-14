@@ -267,7 +267,8 @@ def open_sales_window(root):
         else:
             _set_fx_manual('Offline - enter rate')
 
-    refresh_btn = ttk.Button(right_fx, text='Refresh', command=do_refresh_rate)
+    from .theme import themed_button
+    refresh_btn = themed_button(right_fx, text='Refresh', variant='primary', command=do_refresh_rate)
     refresh_btn.pack(side='right')
 
     def auto_fill_fx():

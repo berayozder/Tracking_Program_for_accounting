@@ -2,7 +2,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 from pathlib import Path
 import db.db as db
-from .theme import stripe_treeview, maximize_window
+from .theme import stripe_treeview, maximize_window, themed_button
 
 def open_customers_window(root):
     """
@@ -237,9 +237,9 @@ def open_customers_window(root):
         btn_frame = ttk.Frame(container)
         btn_frame.pack(fill='x', pady=(16, 0))
         
-        ttk.Button(btn_frame, text='Cancel', command=dlg.destroy).pack(side='left')
-        ttk.Button(btn_frame, text='Save Customer', style='Primary.TButton', 
-                  command=save_customer).pack(side='right')
+        themed_button(btn_frame, text='Cancel', variant='secondary', command=dlg.destroy).pack(side='left')
+        themed_button(btn_frame, text='Save Customer', variant='primary', 
+            command=save_customer).pack(side='right')
     
     def do_edit_customer():
         """Edit selected customer dialog."""
@@ -334,9 +334,9 @@ def open_customers_window(root):
         btn_frame = ttk.Frame(container)
         btn_frame.pack(fill='x', pady=(16, 0))
         
-        ttk.Button(btn_frame, text='Cancel', command=dlg.destroy).pack(side='left')
-        ttk.Button(btn_frame, text='Save Changes', style='Primary.TButton', 
-                  command=save_changes).pack(side='right')
+        themed_button(btn_frame, text='Cancel', variant='secondary', command=dlg.destroy).pack(side='left')
+        themed_button(btn_frame, text='Save Changes', variant='primary', 
+            command=save_changes).pack(side='right')
     
     def do_delete_customer():
         """Delete selected customer."""
@@ -376,20 +376,20 @@ def open_customers_window(root):
     primary_frame = ttk.Frame(button_frame)
     primary_frame.pack(side='left', fill='x', expand=True)
     
-    ttk.Button(primary_frame, text='➕ Add Customer', style='Primary.TButton',
+    themed_button(primary_frame, text='➕ Add Customer', variant='primary',
                command=do_add_customer).pack(side='left', padx=(0, 8))
-    ttk.Button(primary_frame, text='✏️ Edit Customer', style='Success.TButton',
+    themed_button(primary_frame, text='✏️ Edit Customer', variant='success',
                command=do_edit_customer).pack(side='left', padx=4)
-    ttk.Button(primary_frame, text='🔄 Refresh',
+    themed_button(primary_frame, text='🔄 Refresh', variant='primary',
                command=populate_tree).pack(side='left', padx=4)
     
     # Secondary actions (right side)
     secondary_frame = ttk.Frame(button_frame)
     secondary_frame.pack(side='right')
     
-    ttk.Button(secondary_frame, text='🗑️ Delete Customer', style='Danger.TButton',
+    themed_button(secondary_frame, text='🗑️ Delete Customer', variant='danger',
                command=do_delete_customer).pack(side='left', padx=4)
-    ttk.Button(secondary_frame, text='Close',
+    themed_button(secondary_frame, text='Close', variant='secondary',
                command=win.destroy).pack(side='left', padx=(8, 0))
     
     # Load initial data

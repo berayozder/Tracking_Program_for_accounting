@@ -286,6 +286,20 @@ def maximize_window(win: Union[tk.Tk, tk.Toplevel]):
     """
     try:
         win.update_idletasks()
+        # Try native zoom when available (Windows/Linux)
+        if sys.platform.startswith('win') or sys.platform.startswith('linux'):
+            try:
+                win.state('zoomed')
+                return
+            except Exception:
+                pass
+        # Fallback / macOS path: set geometry to screen size
+        sw = win.winfo_screenwidth()
+        sh = win.winfo_screenheight()
+        try:
+            win.geometry(f"{sw}x{sh}+0+0")
+        except Exception:
+            pass
     except Exception:
         pass
 
@@ -518,19 +532,3 @@ def ask_integer(parent: Union[tk.Tk, tk.Toplevel], title: str, prompt: str, init
         pass
     dlg.wait_window()
     return out['value']
-    try:
-        if sys.platform.startswith('win') or sys.platform.startswith('linux'):
-            try:
-                win.state('zoomed')
-                return
-            except Exception:
-                pass
-        # Fallback / macOS path: set geometry to screen size
-        sw = win.winfo_screenwidth()
-        sh = win.winfo_screenheight()
-        try:
-            win.geometry(f"{sw}x{sh}+0+0")
-        except Exception:
-            pass
-    except Exception:
-        pass

@@ -68,6 +68,9 @@ bir batche de birden fazla sub categoryli varsa onu bütün gibi gir ama farklı
 ctrl+a gibi shortcutlar ekle simple olanlar
 
 
-data store u consistent yap
 
-export_Csv.py gerek yoksa sil
+pycache gereksiz ise sil — Repo zaten .gitignore ile hariç tutuluyor; yerel temizlik komutu eklendi
+
+no button under admin panel?
+
+örnekler için screenshotler ekle sorna onun için boşluk bırak readme de belirt ?

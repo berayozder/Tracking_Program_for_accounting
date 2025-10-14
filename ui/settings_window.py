@@ -74,9 +74,8 @@ def open_settings_window(root):
         except Exception as e:
             messagebox.showerror('Error', f'Failed to save settings: {e}')
 
-    save_btn = ttk.Button(btns, text='Save', command=on_save)
-    save_btn.pack(side='right')
-    cancel_btn = ttk.Button(btns, text='Cancel', command=win.destroy)
-    cancel_btn.pack(side='right', padx=(0, 8))
+    from .theme import themed_button
+    themed_button(btns, text='Save', variant='primary', command=on_save).pack(side='right')
+    themed_button(btns, text='Cancel', variant='secondary', command=win.destroy).pack(side='right', padx=(0, 8))
 
     form.columnconfigure(2, weight=1)

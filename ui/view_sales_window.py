@@ -6,7 +6,7 @@ import os
 import json
 import sys
 import subprocess
-from .theme import stripe_treeview, maximize_window
+from .theme import stripe_treeview, maximize_window, themed_button
 import core.fx_rates as fx_rates
 
 SALES_CSV = Path(__file__).resolve().parents[2] / 'data' / 'sales.csv'
@@ -514,6 +514,7 @@ def open_view_sales_window(root):
         doc_frame = ttk.Frame(dlg)
         doc_entry = ttk.Entry(doc_frame, width=32)
         doc_entry.pack(side=tk.LEFT, padx=(0,6))
+
         def browse_doc():
             path = filedialog.askopenfilename(parent=dlg, title='Select document')
             if path:
@@ -524,7 +525,8 @@ def open_view_sales_window(root):
                 except Exception:
                     doc_entry.delete(0, tk.END)
                     doc_entry.insert(0, path)
-        ttk.Button(doc_frame, text='Browse...', command=browse_doc).pack(side=tk.LEFT)
+
+        themed_button(doc_frame, text='Browse…', variant='secondary', command=browse_doc).pack(side=tk.LEFT)
         doc_frame.pack(pady=2)
 
         def save_return():
@@ -596,7 +598,7 @@ def open_view_sales_window(root):
             except Exception as e:
                 messagebox.showerror('Error', f'Failed to record return: {e}', parent=dlg)
 
-        ttk.Button(dlg, text='Save Return', command=save_return).pack(pady=10)
+        themed_button(dlg, text='Save Return', variant='primary', command=save_return).pack(pady=10)
 
     def do_edit():
         idx = get_selected_index()
@@ -661,7 +663,7 @@ def open_view_sales_window(root):
                     doc_entry.delete(0, tk.END)
                     doc_entry.insert(0, path)
 
-        ttk.Button(doc_frame, text='Browse...', command=browse_doc).pack(side=tk.LEFT)
+        themed_button(doc_frame, text='Browse…', variant='secondary', command=browse_doc).pack(side=tk.LEFT)
         doc_frame.pack(pady=2)
         entries['DocumentPath'] = doc_entry
 
@@ -711,7 +713,7 @@ def open_view_sales_window(root):
             dlg.destroy()
             refresh()
 
-        ttk.Button(dlg, text='Save', command=save_edit).pack(pady=10)
+        themed_button(dlg, text='Save', variant='primary', command=save_edit).pack(pady=10)
 
     # Action buttons with improved hierarchy
     btn_frame = ttk.Frame(main_container)
@@ -722,17 +724,17 @@ def open_view_sales_window(root):
     primary_frame = ttk.Frame(btn_frame)
     primary_frame.pack(side='left', fill='x', expand=True)
     
-    ttk.Button(primary_frame, text='✏️ Edit', style='Success.TButton', 
+    themed_button(primary_frame, text='✏️ Edit', variant='success', 
               command=do_edit).pack(side=tk.LEFT, padx=(0, 8))
-    ttk.Button(primary_frame, text='🔄 Refresh', style='Primary.TButton',
+    themed_button(primary_frame, text='🔄 Refresh', variant='primary',
               command=refresh).pack(side=tk.LEFT, padx=4)
-    ttk.Button(primary_frame, text='Select All', style='Primary.TButton', command=lambda: (select_all(), selected_var.set(f"Selected: {len(tree.selection())}"))).pack(side=tk.LEFT, padx=4)
+    themed_button(primary_frame, text='Select All', variant='primary', command=lambda: (select_all(), selected_var.set(f"Selected: {len(tree.selection())}"))).pack(side=tk.LEFT, padx=4)
     def deselect_all():
         try:
             tree.selection_remove(tree.get_children(''))
         except Exception:
             pass
-    ttk.Button(primary_frame, text='Deselect All', style='Primary.TButton', command=lambda: (deselect_all(), selected_var.set('Selected: 0'))).pack(side=tk.LEFT, padx=4)
+    themed_button(primary_frame, text='Deselect All', variant='primary', command=lambda: (deselect_all(), selected_var.set('Selected: 0'))).pack(side=tk.LEFT, padx=4)
     def do_manage_docs():
         idx = get_selected_index()
         if idx is None:
@@ -825,11 +827,11 @@ def open_view_sales_window(root):
             dlg.destroy()
             refresh()
 
-        ttk.Button(btns, text='➕ Add…', command=add_docs).pack(side=tk.LEFT)
-        ttk.Button(btns, text='🗑️ Remove', command=remove_selected).pack(side=tk.LEFT, padx=6)
-        ttk.Button(btns, text='📄 Open', command=open_selected).pack(side=tk.LEFT, padx=6)
-        ttk.Button(btns, text='📂 Open All', command=open_all).pack(side=tk.LEFT, padx=6)
-        ttk.Button(container, text='Save & Close', command=save_and_close).pack(pady=(8,0))
+        themed_button(btns, text='➕ Add…', variant='secondary', command=add_docs).pack(side=tk.LEFT)
+        themed_button(btns, text='🗑️ Remove', variant='secondary', command=remove_selected).pack(side=tk.LEFT, padx=6)
+        themed_button(btns, text='📄 Open', variant='secondary', command=open_selected).pack(side=tk.LEFT, padx=6)
+        themed_button(btns, text='📂 Open All', variant='secondary', command=open_all).pack(side=tk.LEFT, padx=6)
+        themed_button(container, text='Save & Close', variant='primary', command=save_and_close).pack(pady=(8,0))
 
     def _open_default(path):
         p = Path(path).expanduser()
@@ -951,15 +953,15 @@ def open_view_sales_window(root):
             scrollbar.pack(side='right', fill='y')
         
         # Close button
-        ttk.Button(container, text='Close', command=dlg.destroy).pack(pady=(12, 0))
+        themed_button(container, text='Close', variant='secondary', command=dlg.destroy).pack(pady=(12, 0))
 
-    ttk.Button(secondary_frame, text='📊 Batch Info', 
+    themed_button(secondary_frame, text='📊 Batch Info', variant='secondary',
               command=do_view_batch_info).pack(side=tk.LEFT, padx=4)
-    ttk.Button(secondary_frame, text='� Documents', 
+    themed_button(secondary_frame, text='📄 Documents', variant='secondary',
               command=do_manage_docs).pack(side=tk.LEFT, padx=4)
-    ttk.Button(secondary_frame, text='↩️ Mark Returned', style='Secondary.TButton',
+    themed_button(secondary_frame, text='↩️ Mark Returned', variant='secondary',
               command=do_mark_returned).pack(side=tk.LEFT, padx=(8, 4))
-    ttk.Button(secondary_frame, text='🗑️ Delete', style='Danger.TButton',
+    themed_button(secondary_frame, text='🗑️ Delete', variant='danger',
               command=do_delete).pack(side=tk.LEFT, padx=4)
     
     btn_frame.pack(fill='x', pady=8)

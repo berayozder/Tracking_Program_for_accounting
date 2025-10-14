@@ -1,7 +1,7 @@
 import tkinter as tk
 from tkinter import ttk, messagebox
 import db.db as db
-from .theme import stripe_treeview, apply_theme, maximize_window
+from .theme import stripe_treeview, apply_theme, maximize_window, themed_button
 
 
 def open_suppliers_window(root):
@@ -178,8 +178,8 @@ def open_suppliers_window(root):
 
         btns = ttk.Frame(frm)
         btns.pack(fill='x', pady=(12, 0))
-        ttk.Button(btns, text='Cancel', command=dlg.destroy).pack(side='left')
-        ttk.Button(btns, text='Save Supplier', style='Primary.TButton', command=save).pack(side='right')
+        themed_button(btns, text='Cancel', variant='secondary', command=dlg.destroy).pack(side='left')
+        themed_button(btns, text='Save Supplier', variant='primary', command=save).pack(side='right')
 
     def do_edit_supplier():
         s = get_selected_supplier()
@@ -237,8 +237,8 @@ def open_suppliers_window(root):
 
         btns = ttk.Frame(frm)
         btns.pack(fill='x', pady=(12, 0))
-        ttk.Button(btns, text='Cancel', command=dlg.destroy).pack(side='left')
-        ttk.Button(btns, text='Save Changes', style='Primary.TButton', command=save).pack(side='right')
+        themed_button(btns, text='Cancel', variant='secondary', command=dlg.destroy).pack(side='left')
+        themed_button(btns, text='Save Changes', variant='primary', command=save).pack(side='right')
 
     def do_delete_supplier():
         s = get_selected_supplier()
@@ -265,10 +265,10 @@ def open_suppliers_window(root):
     left.pack(side='left', fill='x', expand=True)
     right = ttk.Frame(btn_row)
     right.pack(side='right')
-    ttk.Button(left, text='➕ Add Supplier', style='Primary.TButton', command=do_add_supplier).pack(side='left', padx=(0, 8))
-    ttk.Button(left, text='✏️ Edit Supplier', style='Success.TButton', command=do_edit_supplier).pack(side='left', padx=4)
-    ttk.Button(left, text='🔄 Refresh', command=populate_tree).pack(side='left', padx=4)
-    ttk.Button(right, text='🗑️ Delete Supplier', style='Danger.TButton', command=do_delete_supplier).pack(side='left', padx=4)
-    ttk.Button(right, text='Close', command=win.destroy).pack(side='left', padx=(8, 0))
+    themed_button(left, text='➕ Add Supplier', variant='primary', command=do_add_supplier).pack(side='left', padx=(0, 8))
+    themed_button(left, text='✏️ Edit Supplier', variant='success', command=do_edit_supplier).pack(side='left', padx=4)
+    themed_button(left, text='🔄 Refresh', variant='primary', command=populate_tree).pack(side='left', padx=4)
+    themed_button(right, text='🗑️ Delete Supplier', variant='danger', command=do_delete_supplier).pack(side='left', padx=4)
+    themed_button(right, text='Close', variant='secondary', command=win.destroy).pack(side='left', padx=(8, 0))
 
     populate_tree()

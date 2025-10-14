@@ -6,7 +6,7 @@ import os
 import json
 import sys
 import subprocess
-from .theme import stripe_treeview, maximize_window, apply_theme
+from .theme import stripe_treeview, maximize_window, apply_theme, themed_button
 
 RETURNS_CSV = Path(__file__).resolve().parents[2] / 'data' / 'returns.csv'
 
@@ -267,7 +267,8 @@ def open_view_returns_window(root):
                     doc_entry.delete(0, tk.END)
                     doc_entry.insert(0, path)
 
-        ttk.Button(doc_frame, text='Browse...', command=browse_doc).pack(side=tk.LEFT)
+        from .theme import themed_button
+        themed_button(doc_frame, text='Browse…', variant='secondary', command=browse_doc).pack(side=tk.LEFT)
         doc_frame.pack(pady=2)
 
         def save_edit():
@@ -305,7 +306,7 @@ def open_view_returns_window(root):
             dlg.destroy()
             refresh()
 
-        ttk.Button(dlg, text='Save', command=save_edit).pack(pady=10)
+        themed_button(dlg, text='Save', variant='primary', command=save_edit).pack(pady=10)
 
     def on_search_change(event=None):
         populate()
@@ -429,22 +430,22 @@ def open_view_returns_window(root):
             dlg.destroy()
             refresh()
 
-        ttk.Button(btns, text='➕ Add…', command=add_docs).pack(side=tk.LEFT)
-        ttk.Button(btns, text='🗑️ Remove', command=remove_selected).pack(side=tk.LEFT, padx=6)
-        ttk.Button(btns, text='📄 Open', command=open_selected).pack(side=tk.LEFT, padx=6)
-        ttk.Button(btns, text='📂 Open All', command=open_all).pack(side=tk.LEFT, padx=6)
-        ttk.Button(container, text='Save & Close', command=save_and_close).pack(pady=(8,0))
+        themed_button(btns, text='➕ Add…', variant='secondary', command=add_docs).pack(side=tk.LEFT)
+        themed_button(btns, text='🗑️ Remove', variant='secondary', command=remove_selected).pack(side=tk.LEFT, padx=6)
+        themed_button(btns, text='📄 Open', variant='secondary', command=open_selected).pack(side=tk.LEFT, padx=6)
+        themed_button(btns, text='📂 Open All', variant='secondary', command=open_all).pack(side=tk.LEFT, padx=6)
+        themed_button(container, text='Save & Close', variant='primary', command=save_and_close).pack(pady=(8,0))
 
     btn_frame = ttk.Frame(win)
-    ttk.Button(btn_frame, text='Refresh', style='Primary.TButton', command=refresh).pack(side=tk.LEFT, padx=6)
-    ttk.Button(btn_frame, text='Select All', style='Primary.TButton', command=select_all).pack(side=tk.LEFT, padx=6)
+    themed_button(btn_frame, text='Refresh', variant='primary', command=refresh).pack(side=tk.LEFT, padx=6)
+    themed_button(btn_frame, text='Select All', variant='primary', command=select_all).pack(side=tk.LEFT, padx=6)
     def deselect_all():
         try:
             tree.selection_remove(tree.get_children(''))
         except Exception:
             pass
-    ttk.Button(btn_frame, text='Deselect All', style='Primary.TButton', command=deselect_all).pack(side=tk.LEFT, padx=6)
-    ttk.Button(btn_frame, text='Edit', style='Success.TButton', command=do_edit).pack(side=tk.LEFT, padx=6)
-    ttk.Button(btn_frame, text='Delete', style='Danger.TButton', command=do_delete).pack(side=tk.LEFT, padx=6)
-    ttk.Button(btn_frame, text='📂 Documents', style='Secondary.TButton', command=do_manage_docs).pack(side=tk.LEFT, padx=6)
+    themed_button(btn_frame, text='Deselect All', variant='primary', command=deselect_all).pack(side=tk.LEFT, padx=6)
+    themed_button(btn_frame, text='Edit', variant='success', command=do_edit).pack(side=tk.LEFT, padx=6)
+    themed_button(btn_frame, text='Delete', variant='danger', command=do_delete).pack(side=tk.LEFT, padx=6)
+    themed_button(btn_frame, text='📂 Documents', variant='secondary', command=do_manage_docs).pack(side=tk.LEFT, padx=6)
     btn_frame.pack(fill='x', pady=8)

@@ -73,8 +73,12 @@ data/*.db
 data/*.log
 
 # CSVs that are runtime generated (keep user-chosen inputs tracked if desired)
-# Uncomment to ignore all CSVs in data
-# data/*.csv
+# Ignore all CSVs in data
+data/*.csv
+
+# CSV backups created by export or maintenance scripts
+data/*.bak-*
+data/*.bak
 
 # Logs
 *.log

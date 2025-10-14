@@ -2,7 +2,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 from pathlib import Path
 import db.db as db
-from .theme import stripe_treeview, maximize_window
+from .theme import stripe_treeview, maximize_window, themed_button
 
 def open_batch_analytics_window(root):
     """
@@ -174,7 +174,7 @@ def open_batch_analytics_window(root):
         except Exception as e:
             messagebox.showerror('Error', f'Failed to get allocation details: {e}')
     
-    ttk.Button(search_frame, text='🔍 Search', command=search_allocation_details).pack(side='left')
+    themed_button(search_frame, text='🔍 Search', variant='primary', command=search_allocation_details).pack(side='left')
     
     # Detail table
     detail_table_frame = ttk.Frame(detail_frame, padding=8)
@@ -490,10 +490,10 @@ def open_batch_analytics_window(root):
     button_frame = ttk.Frame(container)
     button_frame.pack(fill='x', pady=(16, 0))
     
-    ttk.Button(button_frame, text='🔄 Refresh All Data', style='Primary.TButton',
+    themed_button(button_frame, text='🔄 Refresh All Data', variant='primary',
                command=refresh_all_data).pack(side='left', padx=(0, 8))
     
-    ttk.Button(button_frame, text='Close', style='Secondary.TButton',
+    themed_button(button_frame, text='Close', variant='secondary',
                command=win.destroy).pack(side='right')
     
     # Load initial data

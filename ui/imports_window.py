@@ -2,7 +2,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 from datetime import datetime
 import db.db as db
-from .theme import maximize_window
+from .theme import apply_theme, maximize_window
 from .theme import ask_string, themed_button
 
 
@@ -19,6 +19,10 @@ def open_imports_window(root):
     window.geometry("500x600")
     try:
         window.minsize(480, 540)
+    except Exception:
+        pass
+    try:
+        apply_theme(window)
     except Exception:
         pass
     try:

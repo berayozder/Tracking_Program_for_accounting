@@ -3,7 +3,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 from datetime import datetime
 import db.db as db
-from .theme import maximize_window
+from .theme import apply_theme, maximize_window, themed_button
 
 
 def open_expenses_window(root):
@@ -18,6 +18,7 @@ def open_expenses_window(root):
     except Exception:
         pass
     try:
+        apply_theme(window)
         maximize_window(window)
     except Exception:
         pass
@@ -67,7 +68,7 @@ def open_expenses_window(root):
             except Exception:
                 doc_entry.delete(0, tk.END)
                 doc_entry.insert(0, path)
-    ttk.Button(doc_frame, text='Browse...', command=browse_doc).pack(side=tk.LEFT)
+    themed_button(doc_frame, text='Browse…', variant='secondary', command=browse_doc).pack(side=tk.LEFT)
     doc_frame.pack(pady=2)
 
     is_import_var = tk.IntVar(value=0)
@@ -183,8 +184,8 @@ def open_expenses_window(root):
         sb.pack(side=tk.LEFT, fill='y')
         ctrl_row = ttk.Frame(import_section)
         ctrl_row.pack(fill='x', pady=(4,0))
-        ttk.Button(ctrl_row, text='Select All', command=select_all_imports).pack(side=tk.LEFT, padx=(0,6))
-        ttk.Button(ctrl_row, text='Clear', command=clear_all_imports).pack(side=tk.LEFT)
+        themed_button(ctrl_row, text='Select All', variant='primary', command=select_all_imports).pack(side=tk.LEFT, padx=(0,6))
+        themed_button(ctrl_row, text='Clear', variant='secondary', command=clear_all_imports).pack(side=tk.LEFT)
         imp_filter_entry.bind('<KeyRelease>', _on_imp_filter_change)
 
     def _destroy_import_ui():
@@ -331,8 +332,8 @@ def open_expenses_window(root):
     action_bar = ttk.Frame(window)
     action_bar.pack(side=tk.BOTTOM, fill='x', pady=(4, 6))
     ttk.Separator(action_bar, orient='horizontal').pack(fill='x', side=tk.TOP, pady=(0,4))
-    ttk.Button(action_bar, text='Save Expense', style='Primary.TButton', command=save_expense).pack(side=tk.RIGHT, padx=12)
-    ttk.Button(action_bar, text='Cancel', command=window.destroy).pack(side=tk.RIGHT)
+    themed_button(action_bar, text='Save Expense', variant='primary', command=save_expense).pack(side=tk.RIGHT, padx=12)
+    themed_button(action_bar, text='Cancel', variant='secondary', command=window.destroy).pack(side=tk.RIGHT)
 
     # Ensure initial visibility/state respects checkbox (import section hidden until checked)
     on_import_toggle()

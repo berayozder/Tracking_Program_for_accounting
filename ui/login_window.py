@@ -56,8 +56,9 @@ def open_login_dialog(root) -> bool:
 
     btns = ttk.Frame(frm)
     btns.pack(fill='x')
-    ttk.Button(btns, text='Cancel', command=lambda: dlg.destroy()).pack(side='left')
-    ttk.Button(btns, text='Login', style='Primary.TButton', command=do_login).pack(side='right')
+    from .theme import themed_button
+    themed_button(btns, text='Cancel', variant='secondary', command=lambda: dlg.destroy()).pack(side='left')
+    themed_button(btns, text='Login', variant='primary', command=do_login).pack(side='right')
 
     dlg.wait_window()
     return bool(auth_ok['ok'])
@@ -121,8 +122,9 @@ def _bootstrap_admin(root) -> bool:
 
     btns = ttk.Frame(frm)
     btns.pack(fill='x')
-    ttk.Button(btns, text='Cancel', command=lambda: dlg.destroy()).pack(side='left')
-    ttk.Button(btns, text='Create', style='Primary.TButton', command=do_create).pack(side='right')
+    from .theme import themed_button
+    themed_button(btns, text='Cancel', variant='secondary', command=lambda: dlg.destroy()).pack(side='left')
+    themed_button(btns, text='Create', variant='primary', command=do_create).pack(side='right')
 
     dlg.wait_window()
     return bool(done['ok'])

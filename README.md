@@ -1,404 +1,73 @@
-# 📦 Product Tracking Program
+# Tracking Program for Accounting
 
-A comprehensive desktop application for managing imports, inventory, sales, expenses, and returns with automated product ID generation and document management.
+A simple desktop app to track imports, inventory, sales, expenses, returns, and documents. Built with Python (Tkinter + ttk/ttkbootstrap) and SQLite/CSV.
 
-![Version](https://img.shields.io/badge/version-1.5-blue.svg)
-![Python](https://img.shields.io/badge/python-3.10+-brightgreen.svg)
-![License](https://img.shields.io/badge/license-MIT-green.svg)
+> Note: This is my personal side project and it’s under active development.
 
-## 🚀 Features
+## Highlights
+- Imports, Sales, Expenses, Returns with multi‑document attachments
+- FIFO batch tracking with per‑sale cost/profit and optional expense apportion
+- Base currency and date‑based FX rates (Frankfurter) with local cache
+- Suppliers and Customers directories (optional linkage)
+- Consistent, themed UI with sortable/searchable tables
+- Login with hashed passwords and audit log (admin features in UI)
 
-### ✨ What's new (Oct 2025)
-- Login & Roles: User accounts with PBKDF2 hashing, role-based admin actions
-- Audit Log Viewer: Filterable/sortable audit history with CSV export
-- Backup/Restore: One-click DB backup and admin-only restore with auto-backup
-- FIFO Batch Tracking with per-sale cost and profit (import batches + allocations)
-- Currency & FX overhaul:
-  - Single FX provider (frankfurter.app) with on-disk cache for rates
-  - Configurable Base Currency in Settings (affects analytics and displays)
-  - Defaults for import, sale, and expense currencies (override per record)
-  - All allocations/analytics computed in Base Currency using transaction-date rates
-- Expense dialogs now support linking to multiple imports with a filterable checkbox list (Select All / Clear)
-- Monthly/Yearly Analysis window (Revenue, COGS, Gross Profit, Expenses, Net)
-- Suppliers directory (CSV-backed) + Manage Suppliers window and import linking
-- Customers optional linkage for sales (CSV-backed) + Manage Customers window
-- Accessibility upgrades (larger fonts, higher-contrast text) and superhero theme
-- Keyboard-friendly dropdown suggestions for Supplier (Imports) and Customer (Sales)
-- Modern UI overhaul: ttkbootstrap “Superhero” theme with centralized COLORS/FONTS
-- Menubar (File / Reports / Help) + tabbed navigation (Home/Imports/Sales/Expenses/Admin)
-- Status bar with DB path and auto-updating current-year Net Profit
-- Multi-document managers for Sales, Returns, and Expenses (attach many files)
+## Requirements
+- Python 3.10+
+- macOS/Windows/Linux
+- Optional: ttkbootstrap for nicer theming (falls back to ttk)
 
-New in this update:
-- Sales CSV header migrated to `SellingPriceBase` (backward-compatible with legacy `SellingPriceUSD`)
-- Expenses now have a Currency field; default expense currency in Settings; View Expenses always shows Currency and uses a human-friendly column order
-- Refunds integrated into analytics: revenue net of refunds; items returned tracked; restocked returns reverse COGS using exact per-unit allocation cost
-- Monthly/Yearly Analysis UI: added Return Impact and Items Returned columns, drill-down for monthly return impact, and a “Net of returns applied” badge
-- Batch Analytics: new toggle to “Include import-related expenses in costs,” which apportions linked expenses to imports per unit (in base currency) and adjusts unit cost and profit accordingly
-- Fixed allocation unit cost zero bug; historical allocations backfilled and profit/unit recomputed where needed
-
-### 📊 **Complete Business Management**
-- **Import Tracking**: Record and manage product imports with supplier details
-- **Inventory Management**: Real-time stock tracking with automatic updates
-- **Sales Processing**: Record sales with automatic product ID generation
-- **Expense Management**: Track business expenses with optional document attachments
-- **Returns Handling**: Manage product returns with restock options
-
-### 💹 **Batch Tracking & Profitability**
-- **Import Batches (FIFO)**: Every import creates a batch with remaining quantity
-- **Sales Allocations**: Each sold item is allocated to specific batch(es)
-- **Accurate COGS & Profit**: Per-sale revenue, cost and profit analytics
-- **Base-currency analytics**: All costs and revenues normalized to your Base Currency using frankfurter.app rates cached per date
-- **Returns Aware**: Optional restock back to original batch(es) with audit trail
-
-### 🏷️ **Smart Product ID System**
-- **Automatic ID Generation**: Year-prefixed product IDs (e.g., 25001002-0001)
-- **Category Coding**: Unique 3-digit codes for categories and subcategories
-- **Serial Management**: Automatic serial number incrementing
-- **Warranty Tracking**: Filter by warranty year from product ID prefix
-
-### 📄 **Document Management**
-- **Multi-Document Attachments**: Attach multiple files per sale/return/expense
-- **Document Manager Dialogs**: Add/Remove/Open selected or all, then Save
-- **Native File Picker**: Easy document selection and attachment
-- **Cross-Platform Opening**: Open documents with system default applications
-- **Path Management**: Automatic absolute path resolution
-
-### 🎛️ **Advanced UI Features**
-- **Modern Interface**: Clean, professional design with themed styling
-- **Superhero Theme**: ttkbootstrap "Superhero" with ttk fallback; centralized COLORS/FONTS
-- **Menubar & Tabs**: Desktop-style menubar plus a notebook with Home/Imports/Sales/Expenses/Admin
-- **Status Bar**: Shows DB path and current-year Net Profit (auto-refreshes)
-- **Accessible Defaults**: Larger default fonts and higher-contrast text for readability
-- **Smart Filtering**: Search, warranty status, and return status filters
-- **Column Sorting**: Click headers to sort by any column (dates, numbers, text)
-- **Visual Indicators**: Color-coded rows and status indicators
-- **Zebra Striping**: Alternating row colors for better readability
- - **Keyboard-friendly Suggestions**: Live dropdowns for Supplier (Imports) and Customer (Sales)
- - **Consistent Window Sizes**: Sensible geometry and minimum sizes across windows so all controls are visible without manual resizing
- - **CSV Export**: Export visible rows from tables with one click
- - **Rounded, Themed Controls**: Consistent buttons and dialogs (ttkbootstrap or styled ttk)
-
-### 🌐 Currency & FX
-- Single FX source via frankfurter.app with a local cache to minimize network calls
-- Settings window lets you set the Base Currency and defaults for Import, Sale, and Expense currencies
-- Amounts are converted at the transaction date; analytics and allocations are stored/derived in Base Currency for consistency
-- Sales CSV uses `SellingPriceBase` to make the currency explicit; legacy `SellingPriceUSD` is still read for compatibility
-
-### 🔗 **Directories (Optional Linkage)**
-- **Customers (CSV)**: Optional CustomerID on sales; manage in "Manage Customers"
-- **Suppliers (CSV)**: Optional supplier linkage from imports; manage in "Manage Suppliers"
-
-## 📋 Requirements
-
-### System Requirements
-- **Python**: 3.8 or higher
-- **Operating System**: Windows, macOS, or Linux
-- **RAM**: 512MB minimum
-- **Storage**: 100MB for application and data
-
-### Python Dependencies
+## Install
 ```bash
-# Core dependencies (built-in)
-tkinter          # GUI framework
-sqlite3          # Database management
-csv              # CSV file handling
-pathlib          # Path management
-datetime         # Date/time operations
-subprocess       # System operations
+# Clone
 
-# Optional theme (recommended)
-ttkbootstrap     # Beautiful themes (falls back to ttk if not installed)
-```
-
-## 🛠️ Installation
-
-### 1. **Download or Clone**
-```bash
-git clone <repository-url>
 cd Tracking_Program_for_accounting
-```
 
-### 2. **Set Up Python Environment** (Optional but recommended)
-```bash
+# (Optional) create venv
 python -m venv .venv
-source .venv/bin/activate  # On Windows: .venv\Scripts\activate
-```
+source .venv/bin/activate  # Windows: .venv\Scripts\activate
 
-### 3. **Install Dependencies**
-```bash
+# Install deps
 pip install -r requirements.txt
 ```
 
-### 4. **Run the Application**
+## Run
 ```bash
 python main.py
 ```
+On first launch you’ll be prompted to create an admin user.
 
-## 🧹 Linting (Optional for Development)
+## Data locations
+- Database: `data/app.db`
+- CSVs (legacy/interop): `data/sales.csv`, `data/returns.csv`, etc.
+- Documents: stored as file paths; opened with the OS default app
 
-Static analysis helps keep the codebase clean and catch issues early. This project supports both Ruff (fast, all‑in‑one) and Flake8.
+## Core concepts
+- Product IDs: year‑prefixed, category/subcategory coded (auto‑generated)
+- Batch analytics: allocations from imports (FIFO) drive COGS and profit
+- FX handling: amounts normalized to Base Currency using transaction‑date rate
 
-### 1. Install Dev Dependencies
-```bash
-pip install -r requirements-dev.txt
-```
+## UI tips
+- Use the toolbar or tabs (Home/Imports/Sales/Expenses/Admin)
+- Buttons are themed: Primary (Save/Refresh), Secondary (Cancel/Close), Success (Edit/Confirm), Danger (Delete)
+- Tables support search, sort, and CSV export (where available)
 
-### 2. Run Ruff (Preferred)
-```bash
-ruff check py
-```
-Auto-fix simple issues (unused imports, formatting tweaks):
-```bash
-ruff check --fix py
-```
+## Troubleshooting
+- If the window appears small, use the window’s green maximize button (macOS) or the maximize control (Windows/Linux). Most windows set sensible minimum sizes.
+- If FX fetch fails, you can enter the rate manually; cached rates are used on subsequent runs.
 
-### 3. (Optional) Run Flake8
-```bash
-flake8 py
-```
+## Development
+## Development
+- Project layout:
+  - `core/` – cross‑cutting utilities (e.g., FX)
+  - `db/` – database and business logic
+  - `ui/` – Tkinter windows and theming
+  - `data/` – SQLite DB and CSV files
 
-Configuration lives in `ruff.toml`. Adjust `select` / `ignore` or add per‑file ignores there as needed.
-
-
-## 🎯 Quick Start Guide
-
-### First Launch
-1. **Start Application**: Run `python main.py` (you'll be prompted to create an admin on first run)
-2. **Set Up Product Codes**: Go to "Manage Product Codes" to define category codes
-3. **Record First Import**: Add your first product import
-4. **Make First Sale**: Record a sale to see ID generation in action
-
-### Basic Workflow
-1. **📦 Record Import** → Updates inventory automatically
-2. **💰 Record Sale** → Generates product IDs, optionally reduces inventory
-3. **💳 Record Expense** → Track business costs with documents
-4. **↩️ Handle Returns** → Mark sales as returned, optional restocking
-5. **🏭 Manage Suppliers** → Optional supplier directory and linking for imports
-6. **👥 Manage Customers** → Optional customers directory and linking for sales
-7. **📆 Monthly/Yearly Analysis** → Review Revenue/COGS/Profit/Expenses/Net
-
-### Where to find new modules
-- Administration → Manage Suppliers
-- Administration → Manage Customers
-- Administration → Monthly/Yearly Analysis
- - Administration → Audit Log
- - Administration → Backup/Restore
-
-## � Complete Functionality Guide
-
-### 🏠 **Main Dashboard & Navigation**
-**Purpose**: Central hub for accessing all application modules
-**Location**: First window that opens when starting the application
-
-**Features:**
-- **Menubar**: File (Exit), Reports (Batch Analytics, Monthly/Yearly Analysis), Help (About)
-- **Tabbed Notebook**: Home / Imports / Sales / Expenses / Admin
-- **Status Bar**: DB path on left, current year Net Profit on right
-- **Quick Stats Bar**: Displays overview information and recent activity
-- **Sectioned Navigation**: Organized into logical business areas:
-  - 📦 **Imports & Inventory**: Product procurement and stock management
-  - 💰 **Sales & Returns**: Revenue generation and customer returns
-  - 💳 **Expenses**: Business cost tracking
-  - ⚙️ **Administration**: System configuration and settings
-- **Visual Hierarchy**: Primary actions (Record) highlighted, secondary actions (View) subdued
-- **Modern Interface**: Clean design with icons and professional styling
-
-**User Actions:**
-- Click any button to open the corresponding module
-- Access different sections based on current business needs
-- Quick navigation between related functions
-
----
-
-### 📦 **Import Management System**
-
-#### **� Record Import Window**
-**Purpose**: Add new product imports to inventory and track supplier relationships
-
-**Input Fields:**
-- **Date**: Import date (YYYY-MM-DD format, defaults to today)
-- **Category**: Product category (with auto-suggestions from previous imports)
-- **Subcategory**: Product subcategory (optional, with auto-suggestions)
-- **Ordered Price**: Cost per unit from supplier
-- **Quantity**: Number of units imported
-- **Supplier**: Vendor/supplier name
-- **Notes**: Additional information or specifications
-
-**Smart Features:**
-- **Auto-Suggestions**: Dropdown suggestions appear as you type categories/subcategories
-- **Product Code Integration**: Automatically prompts for 3-digit codes for new categories
-- **Validation**: Ensures proper date format, numeric values for prices/quantities
-- **Inventory Integration**: Automatically updates stock levels upon saving
-
-**Workflow:**
-1. Enter import details
-2. System checks for existing product codes
-3. If new category/subcategory, prompts for unique 3-digit codes
-4. Saves import record to database
-5. Automatically updates inventory quantities
-6. Ready for next import entry
-
-#### **📋 View Imports Window**
-**Purpose**: Review, search, edit, and delete import records
-
-**Display Features:**
-- **Sortable Columns**: Click any header to sort (ID, Date, Category, Price, Quantity, Supplier)
-- **Search Function**: Real-time text search across all fields
-- **Zebra Striping**: Alternating row colors for easy reading
-- **Totals Bar**: Shows total rows, quantities, and costs for filtered results
-
-**Actions Available:**
-- **🔄 Refresh**: Reload data from database
-- **✏️ Edit**: Modify existing import records
-- **🗑️ Delete**: Remove import records (rebuilds inventory)
-- **Export**: Save filtered results to CSV (if implemented)
-
-**Edit Functionality:**
-- Modify any field in existing import records
-- Automatic inventory recalculation when quantities change
-- Maintains data integrity and audit trail
-
----
-
-### 📊 **Inventory Management**
-
-#### **📦 View Inventory Window**
-**Purpose**: Monitor current stock levels across all categories and subcategories
-
-**Display Information:**
-- **Category**: Product category name
-- **Subcategory**: Product subcategory (if applicable)
-- **Quantity**: Current stock level (calculated from all imports minus sales)
-- **Last Updated**: Timestamp of most recent inventory change
-
-**Features:**
-- **Real-Time Updates**: Reflects changes from imports and sales immediately
-- **Search Function**: Find specific categories or subcategories quickly
-- **Stock Totals**: Summary of total items across all categories
-- **Automatic Calculation**: No manual entry required - computed from transactions
-
-**Use Cases:**
-- Check stock before making sales
-- Identify low-stock items for reordering
-- Verify inventory accuracy after imports
-- Plan purchasing decisions based on current levels
-
----
-
-### 💰 **Sales Management System**
-
-#### **🆕 Record Sale Window**
-**Purpose**: Process sales transactions with automatic product ID generation
-
-**Form Layout:**
-- **Date**: Sale date (defaults to today, YYYY-MM-DD format)
-- **Category**: Select from available inventory categories
-- **Subcategory**: Auto-populated based on selected category
-- **Quantity**: Number of items sold (must be positive integer)
-- **Unit Price**: Price per individual item
-- **Platform**: Sales channel (Amazon, Etsy, etc. with suggestions)
-- **Inventory Reduction**: Checkbox to automatically reduce stock
-
-**Product ID Generation:**
-- **Format**: `YYCCCSSSSSSSS` (Year-Category-Subcategory-Serial)
-- **Example**: `25001002-0001` (2025, Category 001, Subcategory 002, Serial 0001)
-- **Per-Item IDs**: Each sold item gets unique ID (quantity 5 = 5 different IDs)
-- **Sequential Numbering**: Automatic serial increment per category/subcategory
-
-**Smart Features:**
-- **Inventory Integration**: Categories populated from current stock
-- **Stock Validation**: Warns if sale would create negative inventory
-- **Platform Memory**: Remembers and suggests previously used platforms
-- **Code Management**: Prompts for new category codes when needed
-
-**Workflow:**
-1. Select category/subcategory from inventory
-2. Enter quantity and pricing
-3. Choose platform (with auto-suggestions)
-4. System generates individual product IDs
-5. Optionally reduces inventory stock
-6. Saves one record per item sold
-7. Displays generated ID range confirmation
-
-#### **📋 View Sales Window**
-**Purpose**: Comprehensive sales record management with advanced filtering
-
-**Advanced Filtering:**
-- **Warranty Filter**: Filter by year prefix (25 for 2025, 24 for 2024, etc.)
-- **Return Status**: All / Not Returned / Returned items
-- **Text Search**: Search across dates, categories, platforms, product IDs
-- **Real-Time Updates**: Filters apply immediately as you type
-
-**Table Features:**
-- **Professional Layout**: Proper column sizing and alignment
-- **Sortable Columns**: Click headers for ascending/descending sort
-- **Return Indicators**: Returned items marked with "(Returned)" suffix
-- **Document Icons**: Visual indicators for attached documents
-- **Totals Display**: Shows filtered item count and total selling price
-
-**Action Buttons:**
-- **✏️ Edit**: Modify sale details (blocked for returned items)
-- **🔄 Refresh**: Reload data from files
-- **� Documents**: Manage multiple attachments (add/remove/open)
-- **↩️ Mark Returned**: Process returns with optional restocking
-- **🗑️ Delete**: Remove sale records
-
-**Edit Functionality:**
-- **Full Field Access**: Modify date, category, pricing, platform, product ID
-- **Document Management**: Update attached file paths
-- **Return Protection**: Cannot edit sales that have been returned
-- **Validation**: Ensures data integrity during modifications
-
-#### **↩️ Mark Returned Functionality**
-**Purpose**: Process customer returns with comprehensive tracking
-
-**Return Dialog Fields:**
-- **Return Date**: Date of return (defaults to today)
-- **Refund Amount**: Optional refund value (can differ from original price)
-- **Restock Option**: Checkbox to add item back to inventory
-- **Reason**: Text field for return reason (defective, customer change, etc.)
-- **Return Document**: Attach return receipt, RMA, or related paperwork
-
-**Smart Restock Logic:**
-- **Default Off**: Restock checkbox defaults to unchecked
-- **Confirmation Required**: Asks "Product may be broken. Proceed with restock?"
-- **Inventory Integration**: If confirmed, adds 1 unit back to inventory
-- **Audit Trail**: Records whether item was restocked in returns database
-
-**Return Effects:**
-- **Visual Marking**: Product ID shows "(Returned)" suffix in sales view
-- **Edit Protection**: Original sale becomes read-only
-- **Return Tracking**: Separate return record created for reporting
-- **Optional Restocking**: Inventory updated only if explicitly confirmed
-
-#### 📉 Analytics Impact of Returns
-- Refunds are netted against revenue in Monthly/Yearly analytics
-- Items Returned are tracked and shown in tables
-- If a return is restocked, COGS is reversed using the exact per-unit cost from the original sale’s batch allocations
-- UI additions:
-  - New “Return Impact” and “Items Returned” columns in Monthly/Yearly views
-  - Double‑click a month to see a drill-down of refunds and COGS reversals
-  - A subtle “Net of returns applied” badge under the tables
-
----
-
-### 💳 **Expense Management System**
-
-#### **🆕 Record Expense Window**
-**Purpose**: Track business expenses with document attachment support
-
-**Input Fields:**
-- **Date**: Expense date (YYYY-MM-DD format)
-- **Amount**: Expense amount (numeric validation)
-- **Currency**: Expense currency (defaults from Settings; required)
-- **Import-Related**: Checkbox to enable linking the expense to imports
-- **Link to Import(s)**: Scrollable checkbox list of recent imports with live filter and Select All/Clear
-- **Category**: Expense category with auto-suggestions from previous expenses
-- **Notes**: Additional details or descriptions
-- **Attach Document**: Optional receipt, invoice, or supporting documentation
-
-**Category Intelligence:**
+## License
+MIT
+### 🧹 (Older detailed guide removed)
+For a full tour of every screen, see the UI and code; this README stays focused and short.
 - **Expense-Only Suggestions**: Category dropdown shows only expense categories (not import categories)
 - **Smart Filtering**: Maintains separate category spaces for different business areas
 - **Auto-Complete**: Suggests categories as you type based on expense history
@@ -559,16 +228,6 @@ This hybrid model keeps analytics consistent and still allows lightweight CSV ex
 CSV compatibility:
 - Sales header field `SellingPriceBase` is preferred; legacy `SellingPriceUSD` is still supported for backward compatibility
 
----
-
-### ♿ Accessibility & Theme
-- Larger default fonts and increased contrast for better readability
-- ttkbootstrap "superhero" theme if installed; falls back to ttk gracefully
-- Treeviews use consistent sizing and zebra striping; color tags highlight states
-- Click-to-sort headers and CSV export on all modernized tables
-- Themed dialogs replace system prompts for dark-mode legibility
-
----
 
 ### 🧠 Tips
 - On Record Import and Record Sale, type in Supplier/Customer fields to see live suggestions.
@@ -610,26 +269,6 @@ CSV compatibility:
 **Visual Indicators:**
 - **Sort State Memory**: Remembers sort direction per column
 - **Column Highlighting**: Visual feedback on sorted column (if implemented)
-
-#### **🎨 Visual Design System**
-**Color Coding:**
-- **Status Indicators**: Different colors for different item states
-- **Return Marking**: Returned items highlighted in warning colors
-- **Document Indicators**: Visual cues for items with attachments
-- **Low Stock Alerts**: Color coding for inventory concerns (if implemented)
-
-**Layout Features:**
-- **Responsive Design**: Adapts to different window sizes
-- **Professional Spacing**: Consistent margins and padding
-- **Button Hierarchy**: Visual distinction between primary and secondary actions
-- **Modern Typography**: Clear, readable fonts with appropriate sizing
-
-#### **📱 Cross-Platform Compatibility**
-**File Operations:**
-- **Windows**: Uses `os.startfile()` for document opening
-- **macOS**: Uses `open` command via subprocess
-- **Linux**: Uses `xdg-open` for system default applications
-- **Path Handling**: Proper path resolution across operating systems
 
 ---
 
@@ -809,20 +448,6 @@ db.delete_database_file()  # Complete reset
 - Allocation unit cost zero bug fixed; historical allocations have been backfilled and profit/unit recomputed where needed
 - Sales CSV header migrated to `SellingPriceBase`; the app still reads `SellingPriceUSD` for older files
 
-## 🎨 Customization
-
-### Themes & Styling
-The application uses a modern theme system in `ui/theme.py`:
-- **Colors**: Modify color palette for different branding
-- **Fonts**: Adjust font sizes and families
-- **Spacing**: Customize padding and margins
-- **Button Styles**: Create custom button appearances
-
-### Adding Features
-**Extending Functionality:**
-1. **New Modules**: Follow existing patterns in `ui/`
-2. **Database Changes**: Update `db/db.py` with new tables/columns
-3. **UI Integration**: Add buttons to `main.py`
 
 ## 📝 Development
 
@@ -837,12 +462,6 @@ ui/*_window.py        # Form & management windows
 ui/view_*.py          # Data viewing windows
 data/                 # SQLite DB + CSV data files
 ```
-
-### Code Standards
-- **Python 3.8+** compatibility
-- **Type hints** where applicable
-- **Error handling** with try/except blocks
-- **Consistent styling** following established patterns
 
 ## 📄 License
 
@@ -865,16 +484,6 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
 FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
 ```
-
-## 🤝 Support
-
-### Getting Help
-1. **Check Troubleshooting** section above
-2. **Review Error Messages** for specific guidance
-3. **Backup Data** before attempting fixes
-4. **Test with Small Dataset** to isolate issues
-
-
 
 ---
 

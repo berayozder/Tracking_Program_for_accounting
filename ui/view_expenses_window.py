@@ -2,7 +2,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 from datetime import datetime
 import db.db as db
-from .theme import stripe_treeview, maximize_window, apply_theme
+from .theme import stripe_treeview, maximize_window, apply_theme, themed_button
 import os
 import json
 import sys
@@ -320,9 +320,9 @@ def open_view_expenses_window(root):
                 return
             for i in sel:
                 _open_default(doc_list[i])
-        ttk.Button(btns, text='➕ Add…', command=add_docs).pack(side=tk.LEFT)
-        ttk.Button(btns, text='🗑️ Remove', command=remove_selected).pack(side=tk.LEFT, padx=6)
-        ttk.Button(btns, text='📄 Open', command=open_selected).pack(side=tk.LEFT, padx=6)
+        themed_button(btns, text='➕ Add…', variant='secondary', command=add_docs).pack(side=tk.LEFT)
+        themed_button(btns, text='🗑️ Remove', variant='secondary', command=remove_selected).pack(side=tk.LEFT, padx=6)
+        themed_button(btns, text='📄 Open', variant='secondary', command=open_selected).pack(side=tk.LEFT, padx=6)
 
         is_imp_var = tk.IntVar(value=int(rec.get('is_import_related') or 0))
         is_imp_cb = ttk.Checkbutton(f, text='Import-related', variable=is_imp_var)
@@ -530,8 +530,8 @@ def open_view_expenses_window(root):
         def _clear_all_imp():
             _clear_imp_checks()
 
-        ttk.Button(ctrl_row, text='Select All', command=_select_all_imp).pack(side=tk.LEFT, padx=(0,6))
-        ttk.Button(ctrl_row, text='Clear', command=_clear_all_imp).pack(side=tk.LEFT)
+        themed_button(ctrl_row, text='Select All', variant='primary', command=_select_all_imp).pack(side=tk.LEFT, padx=(0,6))
+        themed_button(ctrl_row, text='Clear', variant='secondary', command=_clear_all_imp).pack(side=tk.LEFT)
 
         is_imp_var.trace_add('write', on_imp_toggle)
         on_imp_toggle()
@@ -571,7 +571,7 @@ def open_view_expenses_window(root):
             except Exception as e:
                 messagebox.showerror('Error', f'Failed to save: {e}')
 
-        ttk.Button(f, text='Save', command=save_edit).pack(pady=8)
+        themed_button(f, text='Save', variant='primary', command=save_edit).pack(pady=8)
 
     def _open_default(path):
         p = (path or '').strip()
@@ -676,11 +676,11 @@ def open_view_expenses_window(root):
                 refresh()
             except Exception as e:
                 messagebox.showerror('Error', f'Failed to save: {e}', parent=dlg)
-        ttk.Button(btns, text='➕ Add…', command=add_docs).pack(side=tk.LEFT)
-        ttk.Button(btns, text='🗑️ Remove', command=remove_selected).pack(side=tk.LEFT, padx=6)
-        ttk.Button(btns, text='📄 Open', command=open_selected).pack(side=tk.LEFT, padx=6)
-        ttk.Button(btns, text='📂 Open All', command=open_all).pack(side=tk.LEFT, padx=6)
-        ttk.Button(container, text='Save & Close', command=save_and_close).pack(pady=(8,0))
+        themed_button(btns, text='➕ Add…', variant='secondary', command=add_docs).pack(side=tk.LEFT)
+        themed_button(btns, text='🗑️ Remove', variant='secondary', command=remove_selected).pack(side=tk.LEFT, padx=6)
+        themed_button(btns, text='📄 Open', variant='secondary', command=open_selected).pack(side=tk.LEFT, padx=6)
+        themed_button(btns, text='📂 Open All', variant='secondary', command=open_all).pack(side=tk.LEFT, padx=6)
+        themed_button(container, text='Save & Close', variant='primary', command=save_and_close).pack(pady=(8,0))
 
     def do_open_doc():
         rec = get_selected()
@@ -701,20 +701,20 @@ def open_view_expenses_window(root):
     # Primary actions (left)
     primary_frame = ttk.Frame(btn_frame)
     primary_frame.pack(side='left', fill='x', expand=True)
-    ttk.Button(primary_frame, text='🔄 Refresh', style='Primary.TButton', command=refresh).pack(side=tk.LEFT, padx=(0, 8))
-    ttk.Button(primary_frame, text='Select All', style='Primary.TButton', command=lambda: (select_all(), _update_selected_badge())).pack(side=tk.LEFT, padx=4)
+    themed_button(primary_frame, text='🔄 Refresh', variant='primary', command=refresh).pack(side=tk.LEFT, padx=(0, 8))
+    themed_button(primary_frame, text='Select All', variant='primary', command=lambda: (select_all(), _update_selected_badge())).pack(side=tk.LEFT, padx=4)
     def deselect_all():
         try:
             tree.selection_remove(tree.get_children(''))
         except Exception:
             pass
-    ttk.Button(primary_frame, text='Deselect All', style='Primary.TButton', command=lambda: (deselect_all(), _update_selected_badge())).pack(side=tk.LEFT, padx=4)
-    ttk.Button(primary_frame, text='✏️ Edit', style='Success.TButton', command=do_edit).pack(side=tk.LEFT, padx=4)
+    themed_button(primary_frame, text='Deselect All', variant='primary', command=lambda: (deselect_all(), _update_selected_badge())).pack(side=tk.LEFT, padx=4)
+    themed_button(primary_frame, text='✏️ Edit', variant='success', command=do_edit).pack(side=tk.LEFT, padx=4)
     
     # Secondary actions (right)
     secondary_frame = ttk.Frame(btn_frame)
     secondary_frame.pack(side='right')
-    ttk.Button(secondary_frame, text='📂 Documents', style='Secondary.TButton', command=do_manage_docs).pack(side=tk.LEFT, padx=4)
-    ttk.Button(secondary_frame, text='🗑️ Delete', style='Danger.TButton', command=do_delete).pack(side=tk.LEFT, padx=(8, 0))
+    themed_button(secondary_frame, text='📂 Documents', variant='secondary', command=do_manage_docs).pack(side=tk.LEFT, padx=4)
+    themed_button(secondary_frame, text='🗑️ Delete', variant='danger', command=do_delete).pack(side=tk.LEFT, padx=(8, 0))
     
     btn_frame.pack(fill='x', pady=8)
