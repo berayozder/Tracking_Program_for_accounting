@@ -1,13 +1,26 @@
 import tkinter as tk
 from tkinter import ttk, messagebox
 import db
-from .theme import stripe_treeview
+from .theme import stripe_treeview, maximize_window, apply_theme, themed_button
 
 
 def open_view_inventory_window(root):
     window = tk.Toplevel(root)
-    window.title("Inventory")
+    window.title("📦 Inventory")
     window.geometry("700x400")
+    try:
+        window.minsize(620, 340)
+    except Exception:
+        pass
+    # Apply theme for consistent styling
+    try:
+        apply_theme(window)
+    except Exception:
+        pass
+    try:
+        maximize_window(window)
+    except Exception:
+        pass
 
     rows = db.get_inventory()
     if not rows:
@@ -29,6 +42,19 @@ def open_view_inventory_window(root):
         tree.heading(c, text=c)
         tree.column(c, width=150, anchor=tk.CENTER)
     tree.pack(expand=True, fill='both')
+
+    # Select All helper and key bindings
+    def select_all(event=None):
+        try:
+            tree.selection_set(tree.get_children(''))
+            return 'break'
+        except Exception:
+            return None
+    try:
+        tree.bind('<Control-a>', select_all)
+        tree.bind('<Command-a>', select_all)  # macOS
+    except Exception:
+        pass
 
     # Column sorting helper
     sort_state = {}
@@ -71,10 +97,13 @@ def open_view_inventory_window(root):
                 return True
         return False
 
-    # Totals label
+    # Totals + Selected badge
+    totals_row = ttk.Frame(window)
+    totals_row.pack(fill='x', padx=8, pady=4)
     totals_var = tk.StringVar(value='')
-    totals_lbl = ttk.Label(window, textvariable=totals_var, anchor='w')
-    totals_lbl.pack(fill='x', padx=8, pady=4)
+    ttk.Label(totals_row, textvariable=totals_var, anchor='w').pack(side='left')
+    selected_var = tk.StringVar(value='Selected: 0')
+    ttk.Label(totals_row, textvariable=selected_var, anchor='e').pack(side='right')
 
     def populate():
         for r in tree.get_children():
@@ -94,6 +123,10 @@ def open_view_inventory_window(root):
             stripe_treeview(tree)
         except Exception:
             pass
+        try:
+            selected_var.set('Selected: 0')
+        except Exception:
+            pass
 
     populate()
 
@@ -104,4 +137,25 @@ def open_view_inventory_window(root):
         populate()
 
     search_entry.bind('<KeyRelease>', on_search_change)
-    tk.Button(window, text='Refresh', command=refresh).pack(pady=6)
+    def _update_selected_badge(event=None):
+        try:
+            selected_var.set(f"Selected: {len(tree.selection())}")
+        except Exception:
+            pass
+    tree.bind('<<TreeviewSelect>>', _update_selected_badge)
+    # Toolbar with left/right grouping
+    btns = ttk.Frame(window)
+    primary_frame = ttk.Frame(btns)
+    primary_frame.pack(side='left', fill='x', expand=True)
+    secondary_frame = ttk.Frame(btns)
+    secondary_frame.pack(side='right')
+
+    themed_button(primary_frame, text='🔄 Refresh', variant='primary', command=refresh).pack(side=tk.LEFT, padx=(0, 8))
+    themed_button(primary_frame, text='Select All', variant='primary', command=lambda: (select_all(), _update_selected_badge())).pack(side=tk.LEFT, padx=4)
+    def deselect_all():
+        try:
+            tree.selection_remove(tree.get_children(''))
+        except Exception:
+            pass
+    themed_button(primary_frame, text='Deselect All', variant='primary', command=lambda: (deselect_all(), _update_selected_badge())).pack(side=tk.LEFT, padx=4)
+    btns.pack(fill='x', pady=8)

@@ -3,9 +3,10 @@ from tkinter import ttk, messagebox, filedialog
 import csv
 from pathlib import Path
 import os
+import json
 import sys
 import subprocess
-from .theme import stripe_treeview
+from .theme import stripe_treeview, maximize_window, apply_theme
 
 RETURNS_CSV = Path(__file__).resolve().parents[2] / 'data' / 'returns.csv'
 
@@ -41,8 +42,20 @@ def open_view_returns_window(root):
         return
 
     win = tk.Toplevel(root)
-    win.title('View Returns')
+    win.title('↩️ View Returns')
     win.geometry('980x460')
+    try:
+        win.minsize(860, 380)
+    except Exception:
+        pass
+    try:
+        apply_theme(win)
+    except Exception:
+        pass
+    try:
+        maximize_window(win)
+    except Exception:
+        pass
 
     # Search box
     filter_frame = ttk.Frame(win)
@@ -58,6 +71,19 @@ def open_view_returns_window(root):
         tree.heading(c, text=c)
         tree.column(c, width=140, anchor=tk.CENTER)
     tree.pack(expand=True, fill='both')
+
+    # Select All helper and key bindings
+    def select_all(event=None):
+        try:
+            tree.selection_set(tree.get_children(''))
+            return 'break'
+        except Exception:
+            return None
+    try:
+        tree.bind('<Control-a>', select_all)
+        tree.bind('<Command-a>', select_all)  # macOS
+    except Exception:
+        pass
 
     # Column sorting helper
     sort_state = {}
@@ -103,6 +129,30 @@ def open_view_returns_window(root):
                 return True
         return False
 
+    def parse_docs(val):
+        if val is None:
+            return []
+        v = str(val).strip()
+        if not v:
+            return []
+        try:
+            arr = json.loads(v)
+            if isinstance(arr, list):
+                return [str(x).strip() for x in arr if str(x).strip()]
+        except Exception:
+            pass
+        return [v]
+
+    def format_docs(paths):
+        cleaned = []
+        seen = set()
+        for p in paths or []:
+            s = str(p).strip()
+            if s and s not in seen:
+                seen.add(s)
+                cleaned.append(s)
+        return json.dumps(cleaned, ensure_ascii=False)
+
     def populate():
         for r in tree.get_children():
             tree.delete(r)
@@ -110,7 +160,19 @@ def open_view_returns_window(root):
         total_refund = 0.0
         for i, row in enumerate(read_returns()):
             if row_matches(row, search_var.get().strip()):
-                tree.insert('', tk.END, iid=str(i), values=[row.get(c, '') for c in cols])
+                vals = [row.get(c, '') for c in cols]
+                try:
+                    idx = cols.index('ReturnDocPath')
+                    doc_list = parse_docs(row.get('ReturnDocPath', ''))
+                    if len(doc_list) == 0:
+                        vals[idx] = ''
+                    elif len(doc_list) == 1:
+                        vals[idx] = doc_list[0]
+                    else:
+                        vals[idx] = f"{len(doc_list)} docs"
+                except Exception:
+                    pass
+                tree.insert('', tk.END, iid=str(i), values=vals)
                 count += 1
                 try:
                     total_refund += float(row.get('RefundAmount') or 0)
@@ -268,23 +330,121 @@ def open_view_returns_window(root):
         except Exception as e:
             messagebox.showerror('Error', f'Failed to open document: {e}', parent=win)
 
-    def do_open_doc():
+    def get_selected_index():
         sel = tree.selection()
         if not sel:
+            return None
+        try:
+            return int(sel[0])
+        except Exception:
+            return None
+
+    def do_manage_docs():
+        idx = get_selected_index()
+        if idx is None:
             messagebox.showwarning('Select', 'Select a row first')
             return
-        iid = sel[0]
-        vals = tree.item(iid)['values']
-        try:
-            idx = cols.index('ReturnDocPath')
-        except ValueError:
-            idx = len(cols) - 1
-        path = vals[idx] if idx < len(vals) else ''
-        _open_default(path)
+        rows = read_returns()
+        if not (0 <= idx < len(rows)):
+            messagebox.showerror('Error', 'Invalid selection index', parent=win)
+            return
+        rec = rows[idx]
+        pid = rec.get('ProductID','')
+        docs = parse_docs(rec.get('ReturnDocPath',''))
+
+        dlg = tk.Toplevel(win)
+        dlg.title(f'Documents (Return): {pid}')
+        dlg.geometry('560x360')
+        dlg.transient(win)
+        dlg.grab_set()
+
+        container = ttk.Frame(dlg, padding=12)
+        container.pack(fill='both', expand=True)
+
+        list_frame = ttk.Frame(container)
+        list_frame.pack(fill='both', expand=True)
+        lb = tk.Listbox(list_frame, selectmode=tk.EXTENDED, height=10, exportselection=False)
+        sb = ttk.Scrollbar(list_frame, orient='vertical', command=lb.yview)
+        lb.configure(yscrollcommand=sb.set)
+        lb.pack(side=tk.LEFT, fill='both', expand=True)
+        sb.pack(side=tk.LEFT, fill='y')
+
+        def refresh_lb():
+            lb.delete(0, tk.END)
+            for p in docs:
+                lb.insert(tk.END, p)
+        refresh_lb()
+
+        btns = ttk.Frame(container)
+        btns.pack(fill='x', pady=8)
+
+        def add_docs():
+            paths = filedialog.askopenfilenames(parent=dlg, title='Select document(s)')
+            if not paths:
+                return
+            from pathlib import Path as _P
+            for p in paths:
+                try:
+                    rp = str(_P(p).resolve())
+                except Exception:
+                    rp = str(p)
+                if rp and rp not in docs:
+                    docs.append(rp)
+            refresh_lb()
+
+        def remove_selected():
+            sel = list(lb.curselection())
+            if not sel:
+                return
+            for i in reversed(sel):
+                try:
+                    del docs[i]
+                except Exception:
+                    pass
+            refresh_lb()
+
+        def open_selected():
+            sel = lb.curselection()
+            if not sel:
+                messagebox.showinfo('Select', 'Select a document to open', parent=dlg)
+                return
+            for i in sel:
+                try:
+                    _open_default(docs[i])
+                except Exception as e:
+                    messagebox.showerror('Error', f'Failed to open: {e}', parent=dlg)
+
+        def open_all():
+            for p in docs:
+                try:
+                    _open_default(p)
+                except Exception:
+                    pass
+
+        def save_and_close():
+            rows2 = read_returns()
+            if 0 <= idx < len(rows2):
+                rows2[idx]['ReturnDocPath'] = format_docs(docs)
+                write_returns(rows2)
+            dlg.destroy()
+            refresh()
+
+        ttk.Button(btns, text='➕ Add…', command=add_docs).pack(side=tk.LEFT)
+        ttk.Button(btns, text='🗑️ Remove', command=remove_selected).pack(side=tk.LEFT, padx=6)
+        ttk.Button(btns, text='📄 Open', command=open_selected).pack(side=tk.LEFT, padx=6)
+        ttk.Button(btns, text='📂 Open All', command=open_all).pack(side=tk.LEFT, padx=6)
+        ttk.Button(container, text='Save & Close', command=save_and_close).pack(pady=(8,0))
 
     btn_frame = ttk.Frame(win)
-    ttk.Button(btn_frame, text='Refresh', command=refresh).pack(side=tk.LEFT, padx=6)
-    ttk.Button(btn_frame, text='Edit', command=do_edit).pack(side=tk.LEFT, padx=6)
-    ttk.Button(btn_frame, text='Delete', command=do_delete).pack(side=tk.LEFT, padx=6)
-    ttk.Button(btn_frame, text='Open Document', command=do_open_doc).pack(side=tk.LEFT, padx=6)
-    btn_frame.pack(pady=6)
+    ttk.Button(btn_frame, text='Refresh', style='Primary.TButton', command=refresh).pack(side=tk.LEFT, padx=6)
+    ttk.Button(btn_frame, text='Select All', style='Primary.TButton', command=select_all).pack(side=tk.LEFT, padx=6)
+    def deselect_all():
+        try:
+            tree.selection_remove(tree.get_children(''))
+        except Exception:
+            pass
+    ttk.Button(btn_frame, text='Deselect All', style='Primary.TButton', command=deselect_all).pack(side=tk.LEFT, padx=6)
+    ttk.Button(btn_frame, text='Edit', style='Success.TButton', command=do_edit).pack(side=tk.LEFT, padx=6)
+    ttk.Button(btn_frame, text='Delete', style='Danger.TButton', command=do_delete).pack(side=tk.LEFT, padx=6)
+    ttk.Button(btn_frame, text='📂 Documents', style='Secondary.TButton', command=do_manage_docs).pack(side=tk.LEFT, padx=6)
+    btn_frame.pack(fill='x', pady=8)

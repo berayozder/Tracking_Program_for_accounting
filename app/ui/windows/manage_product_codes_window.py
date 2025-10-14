@@ -1,12 +1,26 @@
 import tkinter as tk
-from tkinter import ttk, messagebox, simpledialog
+from tkinter import ttk, messagebox
 import db
+from .theme import maximize_window, themed_button, ask_integer, stripe_treeview, apply_theme
 
 
 def open_manage_product_codes_window(root):
     win = tk.Toplevel(root)
     win.title('Manage Product Codes')
     win.geometry('720x420')
+    try:
+        win.minsize(640, 360)
+    except Exception:
+        pass
+    try:
+        maximize_window(win)
+    except Exception:
+        pass
+    # Apply theme for consistent look
+    try:
+        apply_theme(win)
+    except Exception:
+        pass
 
     cols = ['Category', 'Subcategory', 'CatCode', 'SubCode', 'NextSerial']
     tree = ttk.Treeview(win, columns=cols, show='headings')
@@ -44,6 +58,11 @@ def open_manage_product_codes_window(root):
     def load():
         for r in tree.get_children():
             tree.delete(r)
+        # Ensure stripe tags are configured
+        try:
+            stripe_treeview(tree)
+        except Exception:
+            pass
         rows = db.get_all_product_codes()
         for idx, r in enumerate(rows):
             tree.insert('', tk.END, iid=str(idx), values=[
@@ -53,6 +72,11 @@ def open_manage_product_codes_window(root):
                 str(r.get('sub_code', '')).zfill(3),
                 r.get('next_serial', 1),
             ])
+        # Apply zebra striping across all rows
+        try:
+            stripe_treeview(tree)
+        except Exception:
+            pass
 
     def add_or_edit(existing=None):
         dlg = tk.Toplevel(win)
@@ -99,8 +123,11 @@ def open_manage_product_codes_window(root):
                 return
             dlg.destroy()
             load()
-
-        ttk.Button(dlg, text='Save', command=save).pack(pady=8)
+        # Button row with Cancel and Save
+        btns = ttk.Frame(dlg)
+        btns.pack(fill='x', pady=8)
+        themed_button(btns, text='Cancel', variant='secondary', command=dlg.destroy).pack(side=tk.LEFT)
+        themed_button(btns, text='Save', variant='primary', command=save).pack(side=tk.RIGHT)
 
     def get_selected():
         sel = tree.selection()
@@ -134,7 +161,7 @@ def open_manage_product_codes_window(root):
         if not item:
             messagebox.showwarning('Select', 'Select a row first', parent=win)
             return
-        new_serial = simpledialog.askinteger('Reset Serial', 'Enter new next serial (>=1):', parent=win, minvalue=1)
+        new_serial = ask_integer(win, 'Reset Serial', 'Enter new next serial (>=1):', minvalue=1)
         if new_serial is None:
             return
         try:
@@ -145,11 +172,11 @@ def open_manage_product_codes_window(root):
         load()
 
     btns = ttk.Frame(win)
-    ttk.Button(btns, text='Refresh', command=load).pack(side=tk.LEFT, padx=6)
-    ttk.Button(btns, text='Add', command=lambda: add_or_edit(None)).pack(side=tk.LEFT, padx=6)
-    ttk.Button(btns, text='Edit', command=lambda: add_or_edit(get_selected())).pack(side=tk.LEFT, padx=6)
-    ttk.Button(btns, text='Reset Serial', command=reset_serial).pack(side=tk.LEFT, padx=6)
-    ttk.Button(btns, text='Delete', command=delete_selected).pack(side=tk.LEFT, padx=6)
+    themed_button(btns, text='Refresh', variant='secondary', command=load).pack(side=tk.LEFT, padx=6)
+    themed_button(btns, text='Add', variant='primary', command=lambda: add_or_edit(None)).pack(side=tk.LEFT, padx=6)
+    themed_button(btns, text='Edit', variant='success', command=lambda: add_or_edit(get_selected())).pack(side=tk.LEFT, padx=6)
+    themed_button(btns, text='Reset Serial', variant='secondary', command=reset_serial).pack(side=tk.LEFT, padx=6)
+    themed_button(btns, text='Delete', variant='danger', command=delete_selected).pack(side=tk.LEFT, padx=6)
     btns.pack(pady=8)
 
     load()

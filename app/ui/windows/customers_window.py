@@ -2,7 +2,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 from pathlib import Path
 import db
-from .theme import stripe_treeview
+from .theme import stripe_treeview, maximize_window
 
 def open_customers_window(root):
     """
@@ -10,6 +10,10 @@ def open_customers_window(root):
     Shows all customers with their details and allows editing contact information
     """
     win = tk.Toplevel(root)
+    try:
+        maximize_window(win)
+    except Exception:
+        pass
     win.title('👥 Customer Management')
     win.geometry('900x600')
     win.minsize(800, 500)
@@ -101,6 +105,11 @@ def open_customers_window(root):
         """Load and display customer data."""
         for item in tree.get_children():
             tree.delete(item)
+        # Ensure tag styles (odd/even and states) are configured
+        try:
+            stripe_treeview(tree)
+        except Exception:
+            pass
         
         try:
             customers = db.read_customers()
@@ -147,6 +156,16 @@ def open_customers_window(root):
                     stripe_treeview(tree, item_id, 'warning')  # Medium customer
                 elif sales_count == 0:
                     stripe_treeview(tree, item_id, 'danger')   # No purchases yet
+            # Apply zebra striping across rows while preserving state tags
+            try:
+                children = tree.get_children('')
+                for idx, iid in enumerate(children):
+                    existing = tree.item(iid, 'tags') or ()
+                    odd_even = 'oddrow' if idx % 2 else 'evenrow'
+                    new_tags = (odd_even,) + tuple(t for t in existing if t not in ('oddrow','evenrow'))
+                    tree.item(iid, tags=new_tags)
+            except Exception:
+                pass
             
             # Update stats
             all_customers_count = len(customers)

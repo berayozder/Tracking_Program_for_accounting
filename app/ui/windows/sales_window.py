@@ -1,12 +1,15 @@
 import tkinter as tk
-from tkinter import ttk, messagebox, simpledialog
+from tkinter import ttk, messagebox
 from datetime import datetime
 import csv
 from pathlib import Path
 import db
+import fx_rates
 
 """Record Sale UI writing to CSV.
-CSV columns (canonical): Date, Category, Subcategory, Quantity, UnitPrice, SellingPrice, Platform, ProductID, CustomerID
+CSV columns (canonical):
+Date, Category, Subcategory, Quantity, UnitPrice, SellingPrice, Platform, ProductID, CustomerID, DocumentPath,
+SaleFXToTRY, SellingPriceBase
 """
 
 # Use the project data/sales.csv as per user request
@@ -31,7 +34,7 @@ def ensure_sales_csv():
                     pass
     except Exception:
         pass
-    desired = ['Date', 'Category', 'Subcategory', 'Quantity', 'UnitPrice', 'SellingPrice', 'Platform', 'ProductID', 'CustomerID', 'DocumentPath']
+    desired = ['Date', 'Category', 'Subcategory', 'Quantity', 'UnitPrice', 'SellingPrice', 'Platform', 'ProductID', 'CustomerID', 'DocumentPath', 'SaleFXToTRY', 'SellingPriceBase']
     if not SALES_CSV.exists():
         with SALES_CSV.open('w', newline='') as f:
             csv.writer(f).writerow(desired)
@@ -64,6 +67,9 @@ def ensure_sales_csv():
                 'ProductID': rowd.get('ProductID', ''),
                 'CustomerID': rowd.get('CustomerID', ''),
                 'DocumentPath': rowd.get('DocumentPath', ''),
+                'SaleFXToTRY': rowd.get('SaleFXToTRY', ''),
+                # Backward compatibility: migrate old SellingPriceUSD to SellingPriceBase
+                'SellingPriceBase': rowd.get('SellingPriceBase', rowd.get('SellingPriceUSD', '')),
             })
         with SALES_CSV.open('w', newline='') as f:
             w = csv.DictWriter(f, fieldnames=desired)
@@ -76,7 +82,7 @@ def ensure_sales_csv():
 
 def append_sale(row_dict):
     ensure_sales_csv()
-    cols = ['Date', 'Category', 'Subcategory', 'Quantity', 'UnitPrice', 'SellingPrice', 'Platform', 'ProductID', 'CustomerID', 'DocumentPath']
+    cols = ['Date', 'Category', 'Subcategory', 'Quantity', 'UnitPrice', 'SellingPrice', 'Platform', 'ProductID', 'CustomerID', 'DocumentPath', 'SaleFXToTRY', 'SellingPriceBase']
     with SALES_CSV.open('a', newline='') as f:
         writer = csv.DictWriter(f, fieldnames=cols)
         writer.writerow({k: row_dict.get(k, '') for k in cols})
@@ -89,9 +95,14 @@ def open_sales_window(root):
     win.title('💰 Record Sale')
     win.geometry('560x580')
     win.minsize(500, 520)
+    try:
+        from .theme import maximize_window
+        maximize_window(win)
+    except Exception:
+        pass
     
     # Apply theme to window
-    from .theme import apply_theme
+    from .theme import apply_theme, themed_button, ask_string
     apply_theme(win)
     
     # Main container with padding
@@ -179,7 +190,117 @@ def open_sales_window(root):
     unit_e = ttk.Entry(price_frame, width=15, font=('', 9))
     unit_e.pack(side='right', anchor='e')
 
-    # Platform row
+    # Sale Currency selector
+    from .theme import apply_theme as _ap
+    cur_frame = ttk.Frame(form_section)
+    cur_frame.pack(fill='x', pady=(0, 12))
+    ttk.Label(cur_frame, text='Sale Currency:', font=('', 9, 'bold')).pack(side='left', anchor='w')
+    try:
+        base_ccy = db.get_default_sale_currency()
+    except Exception:
+        base_ccy = 'TRY'
+    sale_ccy_var = tk.StringVar(value=base_ccy)
+    sale_ccy_cb = ttk.Combobox(cur_frame, values=['TRY','USD','EUR','GBP'], textvariable=sale_ccy_var, state='readonly', width=10)
+    sale_ccy_cb.pack(side='right', anchor='e')
+
+    # FX to TRY row (for USD analysis)
+    fx_frame = ttk.Frame(form_section)
+    fx_frame.pack(fill='x', pady=(0, 12))
+    ttk.Label(fx_frame, text='FX rate to base (auto):', font=('', 9, 'bold')).pack(side='left', anchor='w')
+    # Controls on the right: entry + Refresh
+    right_fx = ttk.Frame(fx_frame)
+    right_fx.pack(side='right', anchor='e')
+    fx_e = ttk.Entry(right_fx, width=15, font=('', 9))
+    fx_e.pack(side='left', padx=(0, 6))
+    fx_status = ttk.Label(right_fx, text='', font=('', 8))
+    fx_status.pack(side='right', padx=(6, 0))
+
+    def _set_fx_value(val: float, source: str):
+        fx_e.configure(state='normal')
+        fx_e.delete(0, tk.END)
+        fx_e.insert(0, f"{val:.4f}")
+        fx_e.configure(state='readonly')
+        try:
+            fx_status.config(text=source)
+        except Exception:
+            pass
+
+    def _set_fx_manual(message: str = 'Manual'):
+        fx_e.configure(state='normal')
+        # leave empty for user input
+        try:
+            fx_status.config(text=message)
+        except Exception:
+            pass
+
+    def do_refresh_rate():
+        d = date_e.get().strip()
+        # If date is today, prefer fresh latest instead of cached
+        today = datetime.now().strftime('%Y-%m-%d')
+        if d == today:
+            # fetch live for selected pair
+            try:
+                from_ccy = (sale_ccy_var.get() or 'TRY').upper()
+                to_ccy = db.get_base_currency()
+                # If using our helper, fallback to fx_rates for USD/TRY pairs
+                r = db._get_rate_generic(d, from_ccy, to_ccy)
+            except Exception:
+                r = fx_rates.fetch_live_rate()
+            if r is not None:
+                # cache
+                try:
+                    if from_ccy == 'USD' and to_ccy == 'TRY':
+                        fx_rates.set_rate(d, r)
+                except Exception:
+                    pass
+                _set_fx_value(r, 'Live')
+                return
+        # Fallback to cached-or-fetch for other dates
+        try:
+            from_ccy = (sale_ccy_var.get() or 'TRY').upper()
+            to_ccy = db.get_base_currency()
+            r = db._get_rate_generic(d, from_ccy, to_ccy)
+        except Exception:
+            r = fx_rates.get_or_fetch_rate(d)
+        if r is not None:
+            _set_fx_value(r, 'Cached')
+        else:
+            _set_fx_manual('Offline - enter rate')
+
+    refresh_btn = ttk.Button(right_fx, text='Refresh', command=do_refresh_rate)
+    refresh_btn.pack(side='right')
+
+    def auto_fill_fx():
+        d = date_e.get().strip()
+        today = datetime.now().strftime('%Y-%m-%d')
+        # For today, try to force fresh value before reading cache
+        if d == today:
+            live = fx_rates.fetch_live_rate()
+            if live is not None:
+                fx_rates.set_rate(d, live)
+                _set_fx_value(live, 'Live')
+                return
+        try:
+            from_ccy = (sale_ccy_var.get() or 'TRY').upper()
+            to_ccy = db.get_base_currency()
+            r = db._get_rate_generic(d, from_ccy, to_ccy)
+        except Exception:
+            r = fx_rates.get_or_fetch_rate(d)
+        if r is not None:
+            _set_fx_value(r, 'Cached')
+        else:
+            # Allow manual entry if fetch failed
+            _set_fx_manual('Offline - enter rate')
+
+    # Auto-fetch when window opens and when date changes
+    try:
+        auto_fill_fx()
+    except Exception:
+        pass
+    date_e.bind('<FocusOut>', lambda e: auto_fill_fx())
+    date_e.bind('<Return>', lambda e: auto_fill_fx())
+
+    # Platform row (Entry + auto-suggest dropdown)
     platform_frame = ttk.Frame(form_section)
     platform_frame.pack(fill='x', pady=(0, 0))
     ttk.Label(platform_frame, text='Platform:', font=('', 9, 'bold')).pack(side='left', anchor='w')
@@ -195,8 +316,97 @@ def open_sales_window(root):
                 return sorted(vals)
         except Exception:
             return []
-    platform_e = ttk.Combobox(platform_frame, values=load_platform_suggestions(), width=25, font=('', 9))
+
+    platform_e = ttk.Entry(platform_frame, width=27, font=('', 9))
     platform_e.pack(side='right', anchor='e')
+
+    plat_dropdown = {"win": None}
+
+    def _destroy_plat_dropdown():
+        if plat_dropdown["win"]:
+            try:
+                plat_dropdown["win"].destroy()
+            except Exception:
+                pass
+            plat_dropdown["win"] = None
+
+    def pick_platform(evt=None):
+        winp = plat_dropdown.get("win")
+        if not winp:
+            return
+        lb = getattr(winp, 'listbox', None)
+        if not lb:
+            _destroy_plat_dropdown()
+            return
+        sel = lb.curselection()
+        if sel:
+            platform_e.delete(0, tk.END)
+            platform_e.insert(0, lb.get(sel[0]))
+        _destroy_plat_dropdown()
+        # After picking platform, move focus to customer (optional) or quantity
+        try:
+            customer_e.focus_set()
+        except Exception:
+            try:
+                qty_e.focus_set()
+            except Exception:
+                pass
+
+    def show_plat_suggestions(event=None):
+        q = platform_e.get().strip().lower()
+        names = load_platform_suggestions()
+        # If query empty, show all; else filter
+        matches = names if not q else [n for n in names if q in n.lower()]
+        if matches:
+            if not (plat_dropdown["win"] and tk.Toplevel.winfo_exists(plat_dropdown["win"])):
+                winp = tk.Toplevel(win)
+                winp.wm_overrideredirect(True)
+                winp.attributes('-topmost', True)
+                lb = tk.Listbox(winp, height=min(8, len(matches)), exportselection=False)
+                lb.pack()
+                lb.bind('<<ListboxSelect>>', pick_platform)
+                lb.bind('<Return>', pick_platform)
+                lb.bind('<Double-Button-1>', pick_platform)
+                winp.listbox = lb
+                plat_dropdown["win"] = winp
+            else:
+                winp = plat_dropdown["win"]
+                lb = winp.listbox
+            lb.delete(0, tk.END)
+            for m in matches[:8]:
+                lb.insert(tk.END, m)
+            try:
+                x = win.winfo_rootx() + platform_e.winfo_rootx() - win.winfo_x()
+                y = win.winfo_rooty() + platform_e.winfo_rooty() - win.winfo_y() + platform_e.winfo_height()
+                winp.geometry(f"+{x}+{y}")
+                winp.deiconify()
+            except Exception:
+                pass
+        else:
+            _destroy_plat_dropdown()
+
+    def platform_keydown(event):
+        if event.keysym == 'Down' and plat_dropdown["win"] and tk.Toplevel.winfo_exists(plat_dropdown["win"]):
+            try:
+                lb = plat_dropdown["win"].listbox
+                lb.focus_set()
+                if lb.size() > 0:
+                    lb.selection_clear(0, tk.END)
+                    lb.selection_set(0)
+                    lb.activate(0)
+            except Exception:
+                pass
+            return 'break'
+        elif event.keysym == 'Escape':
+            _destroy_plat_dropdown()
+            return 'break'
+        return None
+
+    # Show suggestions right away on focus and as the user types
+    platform_e.bind('<FocusIn>', show_plat_suggestions)
+    platform_e.bind('<KeyRelease>', show_plat_suggestions)
+    platform_e.bind('<KeyPress>', platform_keydown)
+    platform_e.bind('<FocusOut>', lambda e: _destroy_plat_dropdown())
 
     # Customer row (optional) with dropdown suggestions
     customer_frame = ttk.Frame(form_section)
@@ -355,7 +565,38 @@ def open_sales_window(root):
         except Exception:
             messagebox.showerror('Invalid unit price', 'Unit price must be a number')
             return
+        # FX to TRY validation
+        try:
+            fx_text = (fx_e.get() or '').strip()
+            fx = float(fx_text)
+        except Exception:
+            # Try autofetch if not available
+            try:
+                from_ccy = (sale_ccy_var.get() or 'TRY').upper()
+                to_ccy = db.get_base_currency()
+                r = db._get_rate_generic(d, from_ccy, to_ccy)
+            except Exception:
+                r = fx_rates.get_or_fetch_rate(d)
+            if r is None:
+                messagebox.showerror('FX unavailable', 'Could not fetch FX rate for this date. Please try again later or enter manually.')
+                return
+            fx = float(r)
+            fx_e.configure(state='normal')
+            fx_e.delete(0, tk.END)
+            fx_e.insert(0, f"{fx:.4f}")
+            fx_e.configure(state='readonly')
+        if fx <= 0:
+            messagebox.showerror('Invalid FX', 'FX rate must be greater than 0')
+            return
         platform = platform_e.get().strip()
+        # Cache FX for this date if known USD/TRY pair
+        try:
+            from_ccy = (sale_ccy_var.get() or 'TRY').upper()
+            to_ccy = db.get_base_currency()
+            if from_ccy == 'USD' and to_ccy == 'TRY':
+                fx_rates.upsert_rate(d, fx)
+        except Exception:
+            pass
 
         # Handle customer (optional)
         customer_name = customer_e.get().strip()
@@ -398,7 +639,7 @@ def open_sales_window(root):
                 return
             # ask codes
             while True:
-                cat_code = simpledialog.askstring('Category Code', f"Enter 3-digit code for category '{cat}' (e.g., 001):", parent=win)
+                cat_code = ask_string(win, 'Category Code', f"Enter 3-digit code for category '{cat}' (e.g., 001):")
                 if cat_code is None:
                     if not messagebox.askyesno('Cancel?', 'Codes are required to generate product IDs. Cancel this sale?'):
                         continue
@@ -408,7 +649,7 @@ def open_sales_window(root):
                     break
                 messagebox.showerror('Invalid code', 'Please enter 1-3 digits (will be zero-padded to 3).')
             while True:
-                sub_code = simpledialog.askstring('Subcategory Code', f"Enter 3-digit code for subcategory '{sub or '-'}' (e.g., 002):", parent=win)
+                sub_code = ask_string(win, 'Subcategory Code', f"Enter 3-digit code for subcategory '{sub or '-'}' (e.g., 002):")
                 if sub_code is None:
                     if not messagebox.askyesno('Cancel?', 'Codes are required to generate product IDs. Cancel this sale?'):
                         continue
@@ -429,10 +670,26 @@ def open_sales_window(root):
         batch_allocations = []
         for pid in product_ids:
             # Allocate this individual item (quantity=1) to batches
-            allocations = db.allocate_sale_to_batches(pid, d, cat, sub, 1, unit)
+            # Convert entered unit price to base currency using selected sale currency
+            from_ccy = (sale_ccy_var.get() or 'TRY').upper()
+            base_ccy = db.get_base_currency()
+            unit_in_base = unit
+            if from_ccy != (base_ccy or '').upper():
+                try:
+                    conv = db.convert_amount(d, unit, from_ccy, base_ccy)
+                    if conv is not None:
+                        unit_in_base = conv
+                except Exception:
+                    pass
+            allocations = db.allocate_sale_to_batches(pid, d, cat, sub, 1, unit_in_base)
             batch_allocations.extend(allocations)
             
             # Write sale record (same as before)
+            # SellingPriceBase holds the unit price in base currency
+            try:
+                usd_unit = unit_in_base
+            except Exception:
+                usd_unit = unit / fx
             append_sale({
                 'Date': d,
                 'Category': cat,
@@ -444,6 +701,8 @@ def open_sales_window(root):
                 'ProductID': pid,
                 'CustomerID': customer_id or '',
                 'DocumentPath': '',
+                'SaleFXToTRY': fx,
+                'SellingPriceBase': usd_unit,
             })
 
         # Apply inventory reduction after saving sale (batch system handles this automatically)
@@ -494,7 +753,5 @@ def open_sales_window(root):
     button_frame = ttk.Frame(container)
     button_frame.pack(fill='x', pady=(16, 0))
     
-    ttk.Button(button_frame, text='Cancel', style='Secondary.TButton',
-              command=win.destroy).pack(side='left')
-    ttk.Button(button_frame, text='💰 Save Sale', style='Success.TButton',
-              command=save_sale).pack(side='right')
+    themed_button(button_frame, text='Cancel', variant='secondary', command=win.destroy).pack(side='left')
+    themed_button(button_frame, text='💰 Save Sale', variant='success', command=save_sale).pack(side='right')

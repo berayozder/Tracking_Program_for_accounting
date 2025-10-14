@@ -2,7 +2,8 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 from datetime import datetime
 import db
-from tkinter import simpledialog
+from .theme import maximize_window
+from .theme import ask_string, themed_button
 
 
 def ensure_db():
@@ -16,6 +17,14 @@ def open_imports_window(root):
     window = tk.Toplevel(root)
     window.title("Record Import")
     window.geometry("500x600")
+    try:
+        window.minsize(480, 540)
+    except Exception:
+        pass
+    try:
+        maximize_window(window)
+    except Exception:
+        pass
 
     tk.Label(window, text="Date (YYYY-MM-DD):").pack(pady=5)
     date_entry = tk.Entry(window, width=25)
@@ -36,6 +45,19 @@ def open_imports_window(root):
     tk.Label(window, text="Ordered Price (per unit):").pack(pady=5)
     price_entry = tk.Entry(window, width=20)
     price_entry.pack(pady=5)
+
+    # Currency selection with default from settings
+    try:
+        import db as _db
+        _default_ccy = _db.get_default_import_currency()
+    except Exception:
+        _default_ccy = 'USD'
+    ttk.Label(window, text="Currency:").pack(pady=4)
+    currency_var = tk.StringVar(value=_default_ccy)
+    cur_cb = ttk.Combobox(window, values=['USD','TRY','EUR','GBP'], textvariable=currency_var, state='readonly', width=10)
+    cur_cb.pack(pady=(0,6))
+
+    # No explicit FX entry required; conversion to base currency happens internally using frankfurter
 
     tk.Label(window, text="Quantity: ").pack(pady=5)
     qty_entry = tk.Entry(window, width=20)
@@ -279,6 +301,7 @@ def open_imports_window(root):
         qty = qty_entry.get().strip()
         supplier = supplier_entry.get().strip()
         notes = notes_entry.get().strip()
+        cur = (currency_var.get() or 'USD').strip().upper()
 
         # basic presence check (we still allow writing a row even if some fields are empty)
         if not (category and price and qty):
@@ -307,42 +330,70 @@ def open_imports_window(root):
         except Exception:
             codes = None
         if not codes:
-            # Ask for codes (3-digit) for category and subcategory
-            while True:
-                cat_code = simpledialog.askstring("Category Code", f"Enter 3-digit code for category '{category}' (e.g., 001):", parent=window)
-                if cat_code is None:
-                    if not messagebox.askyesno("Missing codes", "Category/Subcategory codes are required to generate product IDs later. Cancel saving import?", parent=window):
-                        continue
-                    else:
-                        return
-                cat_code = cat_code.strip()
-                if cat_code.isdigit() and 1 <= len(cat_code) <= 3:
-                    break
-                else:
-                    messagebox.showerror("Invalid code", "Please enter 1-3 digits (will be zero-padded to 3).", parent=window)
-
-            while True:
-                sub_code = simpledialog.askstring("Subcategory Code", f"Enter 3-digit code for subcategory '{subcategory or '-'}' (e.g., 002):", parent=window)
-                if sub_code is None:
-                    if not messagebox.askyesno("Missing codes", "Category/Subcategory codes are required to generate product IDs later. Cancel saving import?", parent=window):
-                        continue
-                    else:
-                        return
-                sub_code = sub_code.strip()
-                if sub_code.isdigit() and 1 <= len(sub_code) <= 3:
-                    break
-                else:
-                    messagebox.showerror("Invalid code", "Please enter 1-3 digits (will be zero-padded to 3).", parent=window)
-
+            # Check if the category already has a cat_code; if so, only ask for subcategory code.
+            existing_cat_code = None
             try:
-                db.set_product_code(category, subcategory, cat_code, sub_code, next_serial=1)
-            except Exception as e:
-                messagebox.showerror("Error", f"Failed to save product codes: {e}")
-                return
+                existing_cat_code = db.get_cat_code_for_category(category)
+            except Exception:
+                existing_cat_code = None
+
+            if existing_cat_code:
+                # Ask only for subcategory code
+                while True:
+                    sub_code = ask_string(window, "Subcategory Code", f"Enter 3-digit code for subcategory '{subcategory or '-'}' (e.g., 002):")
+                    if sub_code is None:
+                        if not messagebox.askyesno("Missing code", "Subcategory code is required to generate product IDs later. Cancel saving import?", parent=window):
+                            continue
+                        else:
+                            return
+                    sub_code = sub_code.strip()
+                    if sub_code.isdigit() and 1 <= len(sub_code) <= 3:
+                        break
+                    else:
+                        messagebox.showerror("Invalid code", "Please enter 1-3 digits (will be zero-padded to 3).", parent=window)
+                try:
+                    db.set_product_code(category, subcategory, existing_cat_code, sub_code, next_serial=1)
+                except Exception as e:
+                    messagebox.showerror("Error", f"Failed to save product codes: {e}")
+                    return
+            else:
+                # Ask for both category and subcategory codes
+                while True:
+                    cat_code = ask_string(window, "Category Code", f"Enter 3-digit code for category '{category}' (e.g., 001):")
+                    if cat_code is None:
+                        if not messagebox.askyesno("Missing codes", "Category/Subcategory codes are required to generate product IDs later. Cancel saving import?", parent=window):
+                            continue
+                        else:
+                            return
+                    cat_code = cat_code.strip()
+                    if cat_code.isdigit() and 1 <= len(cat_code) <= 3:
+                        break
+                    else:
+                        messagebox.showerror("Invalid code", "Please enter 1-3 digits (will be zero-padded to 3).", parent=window)
+
+                while True:
+                    sub_code = ask_string(window, "Subcategory Code", f"Enter 3-digit code for subcategory '{subcategory or '-'}' (e.g., 002):")
+                    if sub_code is None:
+                        if not messagebox.askyesno("Missing codes", "Category/Subcategory codes are required to generate product IDs later. Cancel saving import?", parent=window):
+                            continue
+                        else:
+                            return
+                    sub_code = sub_code.strip()
+                    if sub_code.isdigit() and 1 <= len(sub_code) <= 3:
+                        break
+                    else:
+                        messagebox.showerror("Invalid code", "Please enter 1-3 digits (will be zero-padded to 3).", parent=window)
+
+                try:
+                    db.set_product_code(category, subcategory, cat_code, sub_code, next_serial=1)
+                except Exception as e:
+                    messagebox.showerror("Error", f"Failed to save product codes: {e}")
+                    return
 
         # insert into DB (db.add_import will also update inventory and link/create supplier if provided)
         try:
-            db.add_import(row_date, price, qty, supplier, notes, category, subcategory)
+            # Store selected currency; conversion to base currency occurs in db layer
+            db.add_import(row_date, price, qty, supplier, notes, category, subcategory, cur)
         except Exception as e:
             messagebox.showerror("Error", f"Failed to save import: {e}")
             return
@@ -350,7 +401,7 @@ def open_imports_window(root):
         messagebox.showinfo("Saved", "Import saved.")
         window.destroy()
 
-    tk.Button(window, text="Save Import", command=save_import).pack(pady=15)
+    themed_button(window, text="Save Import", variant='primary', command=save_import).pack(pady=15)
 
 
 def update_inventory(category, subcategory, quantity):

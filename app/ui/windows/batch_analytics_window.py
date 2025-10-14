@@ -2,7 +2,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 from pathlib import Path
 import db
-from .theme import stripe_treeview
+from .theme import stripe_treeview, maximize_window
 
 def open_batch_analytics_window(root):
     """
@@ -17,6 +17,10 @@ def open_batch_analytics_window(root):
     win.title('📊 Batch Tracking & Profit Analytics')
     win.geometry('1200x700')
     win.minsize(1000, 600)
+    try:
+        maximize_window(win)
+    except Exception:
+        pass
     
     # Apply theme to window
     from .theme import apply_theme
@@ -36,6 +40,13 @@ def open_batch_analytics_window(root):
     # Stats bar
     stats_frame = ttk.Frame(title_frame)
     stats_frame.pack(fill='x', pady=(8, 0))
+    
+    # Include expenses toggle
+    include_expenses_var = tk.BooleanVar(value=False)
+    toggle_frame = ttk.Frame(stats_frame)
+    toggle_frame.pack(fill='x', pady=(0, 4))
+    ttk.Checkbutton(toggle_frame, text='Include import-related expenses in costs', 
+                    variable=include_expenses_var, command=lambda: refresh_all_data()).pack(side='left')
     
     stats_label = ttk.Label(stats_frame, text='Loading analytics...', font=('', 9))
     stats_label.pack(anchor='w')
@@ -243,7 +254,10 @@ def open_batch_analytics_window(root):
             batch_tree.delete(item)
         
         try:
-            batches = db.get_batch_utilization_report()
+            if include_expenses_var.get():
+                batches = db.get_batch_utilization_report_inclusive(include_expenses=True)
+            else:
+                batches = db.get_batch_utilization_report()
             
             for batch in batches:
                 used_qty = batch['allocated_quantity']
@@ -285,7 +299,7 @@ def open_batch_analytics_window(root):
             profit_tree.delete(item)
         
         try:
-            sales = db.get_profit_analysis_by_sale()
+            sales = db.get_profit_analysis_by_sale(include_expenses=include_expenses_var.get())
             
             for sale in sales:
                 margin_pct = sale.get('profit_margin_percent', 0) or 0
@@ -439,6 +453,11 @@ def open_batch_analytics_window(root):
             migrated_count = db.migrate_existing_imports_to_batches()
             if migrated_count > 0:
                 print(f"Migrated {migrated_count} existing imports to batch system")
+            # Backfill any missing unit costs in historical allocations
+            try:
+                db.backfill_allocation_unit_costs()
+            except Exception:
+                pass
             
             populate_batch_tree()
             populate_profit_tree()
@@ -446,8 +465,12 @@ def open_batch_analytics_window(root):
             
             # Update stats
             try:
-                batches = db.get_batch_utilization_report()
-                sales = db.get_profit_analysis_by_sale()
+                if include_expenses_var.get():
+                    batches = db.get_batch_utilization_report_inclusive(include_expenses=True)
+                    sales = db.get_profit_analysis_by_sale(include_expenses=True)
+                else:
+                    batches = db.get_batch_utilization_report()
+                    sales = db.get_profit_analysis_by_sale()
                 
                 total_batches = len(batches)
                 active_batches = len([b for b in batches if b['remaining_quantity'] > 0])

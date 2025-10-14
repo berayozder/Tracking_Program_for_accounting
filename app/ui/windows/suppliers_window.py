@@ -1,7 +1,7 @@
 import tkinter as tk
 from tkinter import ttk, messagebox
 import db
-from .theme import stripe_treeview, apply_theme
+from .theme import stripe_treeview, apply_theme, maximize_window
 
 
 def open_suppliers_window(root):
@@ -10,6 +10,10 @@ def open_suppliers_window(root):
     win.title('🏭 Supplier Management')
     win.geometry('900x600')
     win.minsize(800, 500)
+    try:
+        maximize_window(win)
+    except Exception:
+        pass
 
     apply_theme(win)
 
@@ -75,6 +79,11 @@ def open_suppliers_window(root):
     def populate_tree():
         for i in tree.get_children():
             tree.delete(i)
+        # Ensure tag styles (odd/even and states) are configured; safe when tree is empty
+        try:
+            stripe_treeview(tree)
+        except Exception:
+            pass
         try:
             suppliers = db.read_suppliers()
             q = search_var.get().lower().strip()
@@ -107,6 +116,17 @@ def open_suppliers_window(root):
                     stripe_treeview(tree, item_id, 'success')
                 elif summary['total_purchases'] > 3000:
                     stripe_treeview(tree, item_id, 'warning')
+            # Apply zebra striping to all rows, preserving any state tags
+            try:
+                children = tree.get_children('')
+                for idx, iid in enumerate(children):
+                    existing = tree.item(iid, 'tags') or ()
+                    odd_even = 'oddrow' if idx % 2 else 'evenrow'
+                    # Put odd/even first so state tags can override if needed
+                    new_tags = (odd_even,) + tuple(t for t in existing if t not in ('oddrow','evenrow'))
+                    tree.item(iid, tags=new_tags)
+            except Exception:
+                pass
             stats_label.configure(text=f"Showing {count} suppliers  |  Total Purchases: ${total:.2f}")
         except Exception as e:
             messagebox.showerror('Error', f'Failed to load suppliers: {e}')
