@@ -66,7 +66,6 @@ On first launch you’ll be prompted to create an admin user.
 
 ## License
 MIT
-### 🧹 (Older detailed guide removed)
 For a full tour of every screen, see the UI and code; this README stays focused and short.
 - **Expense-Only Suggestions**: Category dropdown shows only expense categories (not import categories)
 - **Smart Filtering**: Maintains separate category spaces for different business areas
@@ -394,45 +393,6 @@ Tracking_Program_for_accounting/
 1. Copy entire `data/` folder
 2. Store in safe location
 3. Restore by replacing `data/` folder
-
-**CSV Export:** Use "Export CSV" buttons in viewers (if implemented)
-
-## ⚡ Performance & Optimization
-
-### Recommended Limits
-- **Imports**: 10,000+ records (excellent performance)
-- **Sales**: 50,000+ individual items (good performance)
-- **Categories**: 100+ categories (no performance impact)
-- **File Attachments**: Any size (paths stored, not file contents)
-
-### Performance Tips
-- Regular database maintenance (vacuum/analyze)
-- Periodic data archiving for very large datasets
-- Use filters to limit displayed results in large datasets
-
-## 🔧 Troubleshooting
-
-### Common Issues
-
-**🚫 "Category code already used"**
-- Each category must have a unique code
-- Check existing mappings in "Manage Product Codes"
-- Delete conflicting entry or choose different code
-
-**📁 "File not found" on document open**
-- File may have been moved or deleted
-- Use "Attach Document" to update path
-- Check file permissions and accessibility
-
-**🔢 Product ID generation fails**
-- Ensure category/subcategory codes are defined
-- Check quantity is positive integer
-- Verify database connectivity
-
-**💾 Database locked errors**
-- Close other instances of the application
-- Restart application
-- Check file permissions on `data/app.db`
 
 ### Reset Options
 **Clear Suggestions:**
