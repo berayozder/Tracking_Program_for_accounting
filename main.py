@@ -166,6 +166,21 @@ def main():
     themed_button(exp_btns, text='💸 Record Expense', variant='primary', width=HOME_BTN_WIDTH, command=lambda: open_expenses_window(root)).pack(side='left', padx=(0, 6))
     themed_button(exp_btns, text='📑 View Expenses', variant='secondary', width=HOME_BTN_WIDTH, command=lambda: open_view_expenses_window(root)).pack(side='left', padx=6)
 
+    # Populate Admin tab
+    admin_panel = ttk.Frame(tab_admin)
+    admin_panel.pack(fill='both', expand=True, padx=8, pady=8)
+    ttk.Label(admin_panel, text="Administration", font=("Arial", 14, 'bold')).pack(anchor='w', pady=(0, 8))
+    admin_btns = ttk.Frame(admin_panel)
+    admin_btns.pack(fill='x')
+    themed_button(admin_btns, text='\u2699\ufe0f Settings', variant='secondary', width=HOME_BTN_WIDTH, command=lambda: open_settings_window(root)).pack(side='left', padx=(0, 6))
+    themed_button(admin_btns, text='\ud83d\udd22 Product Codes', variant='secondary', width=HOME_BTN_WIDTH, command=lambda: open_manage_product_codes_window(root)).pack(side='left', padx=6)
+    themed_button(admin_btns, text='\ud83d\udc65 Customers', variant='secondary', width=HOME_BTN_WIDTH, command=lambda: open_customers_window(root)).pack(side='left', padx=6)
+    themed_button(admin_btns, text='\ud83c\udfe2 Suppliers', variant='secondary', width=HOME_BTN_WIDTH, command=lambda: open_suppliers_window(root)).pack(side='left', padx=6)
+    themed_button(admin_btns, text='\ud83d\udcca Batch Analytics', variant='primary', width=HOME_BTN_WIDTH, command=lambda: open_batch_analytics_window(root)).pack(side='left', padx=6)
+    themed_button(admin_btns, text='\ud83d\udcc8 Monthly/Yearly', variant='secondary', width=HOME_BTN_WIDTH, command=lambda: open_monthly_yearly_analytics_window(root)).pack(side='left', padx=6)
+    themed_button(admin_btns, text='Audit Log', variant='secondary', width=HOME_BTN_WIDTH, command=lambda: open_audit_log_window(root)).pack(side='left', padx=6)
+    themed_button(admin_btns, text='Backup/Restore', variant='secondary', width=HOME_BTN_WIDTH, command=lambda: open_backup_window(root)).pack(side='left', padx=6)
+
     root.mainloop()
 
 
