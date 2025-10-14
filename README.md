@@ -132,7 +132,7 @@ pip install -r requirements.txt
 
 ### 4. **Run the Application**
 ```bash
-python py/main.py
+python main.py
 ```
 
 ## 🧹 Linting (Optional for Development)
@@ -164,7 +164,7 @@ Configuration lives in `ruff.toml`. Adjust `select` / `ignore` or add per‑file
 ## 🎯 Quick Start Guide
 
 ### First Launch
-1. **Start Application**: Run `python py/main.py` (you'll be prompted to create an admin on first run)
+1. **Start Application**: Run `python main.py` (you'll be prompted to create an admin on first run)
 2. **Set Up Product Codes**: Go to "Manage Product Codes" to define category codes
 3. **Record First Import**: Add your first product import
 4. **Make First Sale**: Record a sale to see ID generation in action
@@ -726,24 +726,28 @@ This comprehensive functionality guide covers every feature, interaction, and ca
 
 ### Database Structure
 **SQLite Tables:**
-- `imports`: Import records with supplier and pricing data
-- `inventory`: Current stock levels by category/subcategory
-- `expenses`: Business expenses with optional document paths
-- `product_codes`: Category/subcategory code mappings
+- `imports`, `inventory`, `expenses`, `product_codes`
+- `users` (authentication), `audit_log` (history)
+- `import_batches`, `sale_batch_allocations` (FIFO cost tracking)
 
 **CSV Files:**
-- `data/sales.csv`: Sales records with generated product IDs
-- `data/returns.csv`: Return records with restock information
+- `data/sales.csv` (sales records, product IDs)
+- `data/returns.csv` (returns with restock & refund info)
+- `data/customers.csv`, `data/suppliers.csv` (optional linkage directories)
 
 ### Data Location
 ```
 Tracking_Program_for_accounting/
 ├── data/
-│   ├── app.db           # SQLite database
-│   ├── sales.csv        # Sales records
-│   └── returns.csv      # Returns records
-├── py/                  # Application code
-└── README.md           # This file
+│   ├── app.db
+│   ├── sales.csv
+│   ├── returns.csv
+│   ├── customers.csv (optional)
+│   └── suppliers.csv (optional)
+├── db/
+├── core/
+├── ui/
+└── main.py
 ```
 
 ### Backup & Migration
@@ -795,7 +799,7 @@ Tracking_Program_for_accounting/
 **Clear Suggestions:**
 ```python
 # In Python console or script
-import py.db as db
+import db.db as db
 db.reset_all_tables(clear_product_codes=False)  # Keep codes
 # or
 db.delete_database_file()  # Complete reset
@@ -808,7 +812,7 @@ db.delete_database_file()  # Complete reset
 ## 🎨 Customization
 
 ### Themes & Styling
-The application uses a modern theme system in `py/ui/theme.py`:
+The application uses a modern theme system in `ui/theme.py`:
 - **Colors**: Modify color palette for different branding
 - **Fonts**: Adjust font sizes and families
 - **Spacing**: Customize padding and margins
@@ -816,21 +820,22 @@ The application uses a modern theme system in `py/ui/theme.py`:
 
 ### Adding Features
 **Extending Functionality:**
-1. **New Modules**: Follow existing patterns in `py/ui/`
-2. **Database Changes**: Update `py/db.py` with new tables/columns
-3. **UI Integration**: Add buttons to `py/main.py`
+1. **New Modules**: Follow existing patterns in `ui/`
+2. **Database Changes**: Update `db/db.py` with new tables/columns
+3. **UI Integration**: Add buttons to `main.py`
 
 ## 📝 Development
 
 ### Project Structure
 ```
-py/
-├── main.py              # Application entry point
-├── db.py               # Database operations
-└── ui/
-    ├── theme.py        # UI theming and styling
-    ├── *_window.py     # Individual window modules
-    └── view_*.py       # Data viewing modules
+main.py               # Application entry point
+db/db.py              # Database + business logic
+core/fx_rates.py      # FX retrieval & caching
+core/crypto_utils.py  # Optional encryption helpers
+ui/theme.py           # UI theming and styling
+ui/*_window.py        # Form & management windows
+ui/view_*.py          # Data viewing windows
+data/                 # SQLite DB + CSV data files
 ```
 
 ### Code Standards
