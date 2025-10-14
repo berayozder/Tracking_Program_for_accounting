@@ -78,3 +78,6 @@ data/*.log
 
 # Logs
 *.log
+
+# Private project notes
+todo.md
