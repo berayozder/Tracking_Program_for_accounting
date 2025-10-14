@@ -2,11 +2,40 @@
 
 A comprehensive desktop application for managing imports, inventory, sales, expenses, and returns with automated product ID generation and document management.
 
-![Version](https://img.shields.io/badge/version-1.0-blue.svg)
-![Python](https://img.shields.io/badge/python-3.8+-brightgreen.svg)
+![Version](https://img.shields.io/badge/version-1.5-blue.svg)
+![Python](https://img.shields.io/badge/python-3.10+-brightgreen.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 
 ## 🚀 Features
+
+### ✨ What's new (Oct 2025)
+- Login & Roles: User accounts with PBKDF2 hashing, role-based admin actions
+- Audit Log Viewer: Filterable/sortable audit history with CSV export
+- Backup/Restore: One-click DB backup and admin-only restore with auto-backup
+- FIFO Batch Tracking with per-sale cost and profit (import batches + allocations)
+- Currency & FX overhaul:
+  - Single FX provider (frankfurter.app) with on-disk cache for rates
+  - Configurable Base Currency in Settings (affects analytics and displays)
+  - Defaults for import, sale, and expense currencies (override per record)
+  - All allocations/analytics computed in Base Currency using transaction-date rates
+- Expense dialogs now support linking to multiple imports with a filterable checkbox list (Select All / Clear)
+- Monthly/Yearly Analysis window (Revenue, COGS, Gross Profit, Expenses, Net)
+- Suppliers directory (CSV-backed) + Manage Suppliers window and import linking
+- Customers optional linkage for sales (CSV-backed) + Manage Customers window
+- Accessibility upgrades (larger fonts, higher-contrast text) and superhero theme
+- Keyboard-friendly dropdown suggestions for Supplier (Imports) and Customer (Sales)
+- Modern UI overhaul: ttkbootstrap “Superhero” theme with centralized COLORS/FONTS
+- Menubar (File / Reports / Help) + tabbed navigation (Home/Imports/Sales/Expenses/Admin)
+- Status bar with DB path and auto-updating current-year Net Profit
+- Multi-document managers for Sales, Returns, and Expenses (attach many files)
+
+New in this update:
+- Sales CSV header migrated to `SellingPriceBase` (backward-compatible with legacy `SellingPriceUSD`)
+- Expenses now have a Currency field; default expense currency in Settings; View Expenses always shows Currency and uses a human-friendly column order
+- Refunds integrated into analytics: revenue net of refunds; items returned tracked; restocked returns reverse COGS using exact per-unit allocation cost
+- Monthly/Yearly Analysis UI: added Return Impact and Items Returned columns, drill-down for monthly return impact, and a “Net of returns applied” badge
+- Batch Analytics: new toggle to “Include import-related expenses in costs,” which apportions linked expenses to imports per unit (in base currency) and adjusts unit cost and profit accordingly
+- Fixed allocation unit cost zero bug; historical allocations backfilled and profit/unit recomputed where needed
 
 ### 📊 **Complete Business Management**
 - **Import Tracking**: Record and manage product imports with supplier details
@@ -15,6 +44,13 @@ A comprehensive desktop application for managing imports, inventory, sales, expe
 - **Expense Management**: Track business expenses with optional document attachments
 - **Returns Handling**: Manage product returns with restock options
 
+### 💹 **Batch Tracking & Profitability**
+- **Import Batches (FIFO)**: Every import creates a batch with remaining quantity
+- **Sales Allocations**: Each sold item is allocated to specific batch(es)
+- **Accurate COGS & Profit**: Per-sale revenue, cost and profit analytics
+- **Base-currency analytics**: All costs and revenues normalized to your Base Currency using frankfurter.app rates cached per date
+- **Returns Aware**: Optional restock back to original batch(es) with audit trail
+
 ### 🏷️ **Smart Product ID System**
 - **Automatic ID Generation**: Year-prefixed product IDs (e.g., 25001002-0001)
 - **Category Coding**: Unique 3-digit codes for categories and subcategories
@@ -22,17 +58,36 @@ A comprehensive desktop application for managing imports, inventory, sales, expe
 - **Warranty Tracking**: Filter by warranty year from product ID prefix
 
 ### 📄 **Document Management**
-- **File Attachments**: Attach documents to sales, expenses, and returns
+- **Multi-Document Attachments**: Attach multiple files per sale/return/expense
+- **Document Manager Dialogs**: Add/Remove/Open selected or all, then Save
 - **Native File Picker**: Easy document selection and attachment
 - **Cross-Platform Opening**: Open documents with system default applications
 - **Path Management**: Automatic absolute path resolution
 
 ### 🎛️ **Advanced UI Features**
 - **Modern Interface**: Clean, professional design with themed styling
+- **Superhero Theme**: ttkbootstrap "Superhero" with ttk fallback; centralized COLORS/FONTS
+- **Menubar & Tabs**: Desktop-style menubar plus a notebook with Home/Imports/Sales/Expenses/Admin
+- **Status Bar**: Shows DB path and current-year Net Profit (auto-refreshes)
+- **Accessible Defaults**: Larger default fonts and higher-contrast text for readability
 - **Smart Filtering**: Search, warranty status, and return status filters
 - **Column Sorting**: Click headers to sort by any column (dates, numbers, text)
 - **Visual Indicators**: Color-coded rows and status indicators
 - **Zebra Striping**: Alternating row colors for better readability
+ - **Keyboard-friendly Suggestions**: Live dropdowns for Supplier (Imports) and Customer (Sales)
+ - **Consistent Window Sizes**: Sensible geometry and minimum sizes across windows so all controls are visible without manual resizing
+ - **CSV Export**: Export visible rows from tables with one click
+ - **Rounded, Themed Controls**: Consistent buttons and dialogs (ttkbootstrap or styled ttk)
+
+### 🌐 Currency & FX
+- Single FX source via frankfurter.app with a local cache to minimize network calls
+- Settings window lets you set the Base Currency and defaults for Import, Sale, and Expense currencies
+- Amounts are converted at the transaction date; analytics and allocations are stored/derived in Base Currency for consistency
+- Sales CSV uses `SellingPriceBase` to make the currency explicit; legacy `SellingPriceUSD` is still read for compatibility
+
+### 🔗 **Directories (Optional Linkage)**
+- **Customers (CSV)**: Optional CustomerID on sales; manage in "Manage Customers"
+- **Suppliers (CSV)**: Optional supplier linkage from imports; manage in "Manage Suppliers"
 
 ## 📋 Requirements
 
@@ -51,6 +106,9 @@ csv              # CSV file handling
 pathlib          # Path management
 datetime         # Date/time operations
 subprocess       # System operations
+
+# Optional theme (recommended)
+ttkbootstrap     # Beautiful themes (falls back to ttk if not installed)
 ```
 
 ## 🛠️ Installation
@@ -77,10 +135,36 @@ pip install -r requirements.txt
 python py/main.py
 ```
 
+## 🧹 Linting (Optional for Development)
+
+Static analysis helps keep the codebase clean and catch issues early. This project supports both Ruff (fast, all‑in‑one) and Flake8.
+
+### 1. Install Dev Dependencies
+```bash
+pip install -r requirements-dev.txt
+```
+
+### 2. Run Ruff (Preferred)
+```bash
+ruff check py
+```
+Auto-fix simple issues (unused imports, formatting tweaks):
+```bash
+ruff check --fix py
+```
+
+### 3. (Optional) Run Flake8
+```bash
+flake8 py
+```
+
+Configuration lives in `ruff.toml`. Adjust `select` / `ignore` or add per‑file ignores there as needed.
+
+
 ## 🎯 Quick Start Guide
 
 ### First Launch
-1. **Start Application**: Run `python py/main.py`
+1. **Start Application**: Run `python py/main.py` (you'll be prompted to create an admin on first run)
 2. **Set Up Product Codes**: Go to "Manage Product Codes" to define category codes
 3. **Record First Import**: Add your first product import
 4. **Make First Sale**: Record a sale to see ID generation in action
@@ -90,14 +174,27 @@ python py/main.py
 2. **💰 Record Sale** → Generates product IDs, optionally reduces inventory
 3. **💳 Record Expense** → Track business costs with documents
 4. **↩️ Handle Returns** → Mark sales as returned, optional restocking
+5. **🏭 Manage Suppliers** → Optional supplier directory and linking for imports
+6. **👥 Manage Customers** → Optional customers directory and linking for sales
+7. **📆 Monthly/Yearly Analysis** → Review Revenue/COGS/Profit/Expenses/Net
+
+### Where to find new modules
+- Administration → Manage Suppliers
+- Administration → Manage Customers
+- Administration → Monthly/Yearly Analysis
+ - Administration → Audit Log
+ - Administration → Backup/Restore
 
 ## � Complete Functionality Guide
 
-### 🏠 **Main Dashboard**
+### 🏠 **Main Dashboard & Navigation**
 **Purpose**: Central hub for accessing all application modules
 **Location**: First window that opens when starting the application
 
 **Features:**
+- **Menubar**: File (Exit), Reports (Batch Analytics, Monthly/Yearly Analysis), Help (About)
+- **Tabbed Notebook**: Home / Imports / Sales / Expenses / Admin
+- **Status Bar**: DB path on left, current year Net Profit on right
 - **Quick Stats Bar**: Displays overview information and recent activity
 - **Sectioned Navigation**: Organized into logical business areas:
   - 📦 **Imports & Inventory**: Product procurement and stock management
@@ -243,8 +340,7 @@ python py/main.py
 **Action Buttons:**
 - **✏️ Edit**: Modify sale details (blocked for returned items)
 - **🔄 Refresh**: Reload data from files
-- **📎 Attach Document**: Add receipt, invoice, or related files
-- **📄 Open Document**: Launch attached files with system default app
+- **� Documents**: Manage multiple attachments (add/remove/open)
 - **↩️ Mark Returned**: Process returns with optional restocking
 - **🗑️ Delete**: Remove sale records
 
@@ -276,6 +372,15 @@ python py/main.py
 - **Return Tracking**: Separate return record created for reporting
 - **Optional Restocking**: Inventory updated only if explicitly confirmed
 
+#### 📉 Analytics Impact of Returns
+- Refunds are netted against revenue in Monthly/Yearly analytics
+- Items Returned are tracked and shown in tables
+- If a return is restocked, COGS is reversed using the exact per-unit cost from the original sale’s batch allocations
+- UI additions:
+  - New “Return Impact” and “Items Returned” columns in Monthly/Yearly views
+  - Double‑click a month to see a drill-down of refunds and COGS reversals
+  - A subtle “Net of returns applied” badge under the tables
+
 ---
 
 ### 💳 **Expense Management System**
@@ -286,8 +391,9 @@ python py/main.py
 **Input Fields:**
 - **Date**: Expense date (YYYY-MM-DD format)
 - **Amount**: Expense amount (numeric validation)
-- **Import-Related**: Checkbox linking expense to specific import
-- **Link to Import**: Dropdown of recent imports (if import-related checked)
+- **Currency**: Expense currency (defaults from Settings; required)
+- **Import-Related**: Checkbox to enable linking the expense to imports
+- **Link to Import(s)**: Scrollable checkbox list of recent imports with live filter and Select All/Clear
 - **Category**: Expense category with auto-suggestions from previous expenses
 - **Notes**: Additional details or descriptions
 - **Attach Document**: Optional receipt, invoice, or supporting documentation
@@ -299,8 +405,10 @@ python py/main.py
 
 **Import Linking:**
 - **Optional Connection**: Link expenses to specific import records
-- **Import Browser**: Dropdown shows recent imports with details (date, category, quantity)
-- **Relationship Tracking**: Maintains connection between costs and inventory
+- **Multi-linking**: Select one or many imports to associate the expense via checkboxes
+- **Live Filter**: Quickly narrow the import list by typing keywords (quick filter above the checkbox list)
+- **Relationship Tracking**: Maintains connections via a dedicated link table
+ - **Clean UI**: Import selection is hidden when not import-related
 
 **Document Support:**
 - **Native File Picker**: Browse and select files using system dialog
@@ -312,9 +420,11 @@ python py/main.py
 
 **Display Features:**
 - **Complete Record View**: All expense fields in sortable table format
+- **Always-visible Currency**: Currency is always shown for clarity (legacy rows may show blank)
 - **Smart Sorting**: Numeric columns (amounts) sort numerically, dates chronologically
 - **Search Functionality**: Real-time search across all expense fields
 - **Totals Summary**: Shows filtered row count and total expense amount
+ - **Readable Columns**: Date, Category, Subcategory, Amount, Currency, Notes, Document
 
 **Document Management:**
 - **📎 Attach Document**: Add or replace document for selected expense
@@ -326,11 +436,11 @@ python py/main.py
 - **✏️ Edit**: Comprehensive editing dialog with all fields
 - **🗑️ Delete**: Remove expense records with confirmation
 - **🔄 Refresh**: Reload from database
-- **Document Operations**: Attach, open, and manage supporting files
+- **📂 Documents**: Add/Remove/Open multiple files per expense
 
 **Edit Dialog Features:**
 - **All Fields Editable**: Date, amount, import linking, category, notes, documents
-- **Import Dropdown**: Browse and select different import connections
+- **Import Linking (Checkboxes)**: Easily add/remove linked imports using the same filterable list
 - **Category Suggestions**: Expense-specific category auto-complete
 - **Document Browse**: Update attached file paths with file picker
 - **Validation**: Date format checking, numeric amount validation
@@ -353,6 +463,7 @@ python py/main.py
 - **Totals Analysis**: Total returns count and refund amounts
 - **Edit Capability**: Modify return details (non-core fields only)
 - **Delete Option**: Remove return records (with confirmation)
+- **📂 Documents**: Manage multiple attachments for returns
 
 **Edit Restrictions:**
 - **Core Fields Protected**: Cannot change Product ID, original sale data
@@ -391,6 +502,89 @@ python py/main.py
 - **Display**: Shows as zero-padded for consistency
 
 ---
+
+#### 🏭 Manage Suppliers Window
+**Purpose**: Maintain an optional supplier directory and see purchase totals
+
+**Features:**
+- Add/Edit/Delete suppliers (name, contact info, address, payment terms, notes)
+- Auto-link imports: typing a supplier name on Record Import finds/creates it
+- Stats per supplier: Import count, Total purchases, Last purchase date
+
+**How to open:** Administration → Manage Suppliers
+
+---
+
+#### 👥 Manage Customers Window
+**Purpose**: Maintain an optional customer directory tied to sales
+
+**Features:**
+- Add/Edit/Delete customers (name, contact info, address, notes)
+- Sales summary: sales count, total revenue, last sale
+- Optional linkage: entering a customer name in Record Sale auto-creates/links
+
+**How to open:** Administration → Manage Customers
+
+---
+
+#### 📆 Monthly/Yearly Analysis
+**Purpose**: High-level financial overview by month and year
+
+**Monthly Overview:**
+- Revenue, COGS, Gross Profit, Expenses, Net Profit, Imports Value (in base currency), Items Sold, and Items Returned per month (Jan–Dec)
+- Totals row and color-coding for quick signals
+
+**Yearly Summary:**
+- Revenue, COGS, Gross Profit, Expenses, Net Profit, Imports Value (in base currency), Items Sold, Items Returned
+
+Notes:
+- Both imports value and expenses are displayed in Base Currency (converted by date)
+- Tables show return impact fields and include a drill‑down for monthly return details
+
+**How to open:** Administration → Monthly/Yearly Analysis
+
+---
+
+### 🗃️ Data Storage Overview
+- **SQLite (data/app.db)**
+  - imports, inventory, expenses, product_codes
+  - users (login), audit_log (history)
+  - import_batches (batches) and sale_batch_allocations (sales-to-batch links)
+- **CSV (data/)**
+  - sales.csv, returns.csv
+  - customers.csv (optional), suppliers.csv (optional)
+
+This hybrid model keeps analytics consistent and still allows lightweight CSV exports.
+
+CSV compatibility:
+- Sales header field `SellingPriceBase` is preferred; legacy `SellingPriceUSD` is still supported for backward compatibility
+
+---
+
+### ♿ Accessibility & Theme
+- Larger default fonts and increased contrast for better readability
+- ttkbootstrap "superhero" theme if installed; falls back to ttk gracefully
+- Treeviews use consistent sizing and zebra striping; color tags highlight states
+- Click-to-sort headers and CSV export on all modernized tables
+- Themed dialogs replace system prompts for dark-mode legibility
+
+---
+
+### 🧠 Tips
+- On Record Import and Record Sale, type in Supplier/Customer fields to see live suggestions.
+- If a category/subcategory is new, the app will ask for 3‑digit codes once, then auto-generate IDs.
+- Expenses can be linked to imports; documents can be attached and opened via the app.
+
+### 📊 Batch Analytics (Reports → Batch Analytics)
+**Purpose:** Deep dive into utilization and profitability by import batch and by product
+
+**Key features:**
+- Batch Utilization view with used %, cost allocated, revenue, and profit
+- Sale Profit Analysis view grouped by product with totals and margin
+- Allocation Details view for precise FIFO tracing per sale
+- New toggle: “Include import-related expenses in costs”
+  - When enabled, expenses linked to an import are converted to base currency (by date), apportioned evenly per unit across that import’s total original quantity, and added to the effective unit cost
+  - Affects batch cost allocated, product total cost, profits, and margins
 
 ### 🎨 **User Interface Features**
 
@@ -606,6 +800,10 @@ db.reset_all_tables(clear_product_codes=False)  # Keep codes
 # or
 db.delete_database_file()  # Complete reset
 ```
+
+### Data & Currency Migrations
+- Allocation unit cost zero bug fixed; historical allocations have been backfilled and profit/unit recomputed where needed
+- Sales CSV header migrated to `SellingPriceBase`; the app still reads `SellingPriceUSD` for older files
 
 ## 🎨 Customization
 

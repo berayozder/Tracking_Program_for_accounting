@@ -1,0 +1,4 @@
+supplier_id,name,email,phone,address,payment_terms,notes,created_date
+SUP001,qq,,,,,,2025-10-13
+SUP002,Çin1,,,,,,2025-10-13
+SUP003,SupplierZ,,,,,,2025-10-14
