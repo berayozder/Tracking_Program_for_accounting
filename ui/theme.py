@@ -220,6 +220,74 @@ def load_icon(name: str) -> Optional[tk.PhotoImage]:
             return tk.PhotoImage(file=str(png_path))
     except Exception:
         return None
+
+
+def install_basic_shortcuts(root: Union[tk.Tk, tk.Toplevel]):
+    """Install common keyboard shortcuts across the app.
+
+    - Ctrl/Cmd+A: Select all (Entry/Text)
+    - Ctrl/Cmd+C: Copy (Entry/Text)
+    - Ctrl/Cmd+X: Cut (Entry/Text)
+    - Ctrl/Cmd+V: Paste (Entry/Text)
+    - Ctrl/Cmd+S: Save (if a focused widget or toplevel defines a virtual event <<AppSave>>)
+    - Esc: Close current dialog (if it defines a virtual event <<AppClose>> or has a .destroy)
+    - Ctrl/Cmd+Q: Quit application
+
+    Windows/Linux use Control, macOS uses Command.
+    """
+    is_macos = sys.platform == 'darwin'
+    mod = 'Command' if is_macos else 'Control'
+
+    # Text/Entry widget edit bindings via virtual events
+    def bind_widget_class_sequences():
+        for cls in ('Entry', 'Text'):
+            root.bind_class(cls, f'<{mod}-a>', lambda e: (e.widget.select_range(0, 'end') if hasattr(e.widget, 'select_range') else e.widget.tag_add('sel', '1.0', 'end'), 'break'))
+            root.bind_class(cls, f'<{mod}-c>', lambda e: (root.event_generate('<<Copy>>'), 'break'))
+            root.bind_class(cls, f'<{mod}-x>', lambda e: (root.event_generate('<<Cut>>'), 'break'))
+            root.bind_class(cls, f'<{mod}-v>', lambda e: (root.event_generate('<<Paste>>'), 'break'))
+
+    bind_widget_class_sequences()
+
+    # App-level shortcuts
+    root.bind_all(f'<{mod}-q>', lambda e: root.quit())
+
+    # Save: let focused widget or toplevel handle <<AppSave>>
+    def _save_dispatch(event):
+        w = root.focus_get()
+        # bubble: focused widget -> toplevel
+        if w is not None:
+            try:
+                w.event_generate('<<AppSave>>')
+                return 'break'
+            except Exception:
+                pass
+        try:
+            root.event_generate('<<AppSave>>')
+        except Exception:
+            pass
+        return 'break'
+
+    root.bind_all(f'<{mod}-s>', _save_dispatch)
+
+    # Escape to close dialogs that opt in
+    def _escape_dispatch(event):
+        w = root.focus_get()
+        # Try widget/toplevel virtual event
+        target = w.winfo_toplevel() if w else root
+        try:
+            target.event_generate('<<AppClose>>')
+            return 'break'
+        except Exception:
+            # As a safe fallback for transient dialog windows, try destroy
+            try:
+                if target is not root:
+                    target.destroy()
+                    return 'break'
+            except Exception:
+                pass
+        return None
+
+    root.bind_all('<Escape>', _escape_dispatch)
     return None
 
 def stripe_treeview(tree: ttk.Treeview, *args):

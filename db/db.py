@@ -1,5 +1,4 @@
 from __future__ import annotations
-
 import sqlite3
 from pathlib import Path
 from datetime import datetime
@@ -352,6 +351,28 @@ def init_db():
     cur.execute('CREATE INDEX IF NOT EXISTS idx_import_batches_date ON import_batches(batch_date)')
     cur.execute('CREATE INDEX IF NOT EXISTS idx_sale_allocations_product ON sale_batch_allocations(product_id)')
     cur.execute('CREATE INDEX IF NOT EXISTS idx_sale_allocations_batch ON sale_batch_allocations(batch_id)')
+    # RETURNS table (currency-aware)
+    cur.execute('''
+    CREATE TABLE IF NOT EXISTS returns (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        return_date TEXT,
+        product_id TEXT,
+        sale_date TEXT,
+        category TEXT,
+        subcategory TEXT,
+        unit_price REAL,
+        selling_price REAL,
+        platform TEXT,
+        refund_amount REAL,
+        refund_currency TEXT,
+        refund_amount_base REAL,
+        restock INTEGER,
+        reason TEXT,
+        doc_paths TEXT
+    )
+    ''')
+    cur.execute('CREATE INDEX IF NOT EXISTS idx_returns_date ON returns(return_date)')
+    cur.execute('CREATE INDEX IF NOT EXISTS idx_returns_product ON returns(product_id)')
     # Triggers for product_codes integrity
     cur.execute('''
     CREATE TRIGGER IF NOT EXISTS trg_product_codes_bi
@@ -398,6 +419,11 @@ def init_db():
     END;
     ''')
     conn.commit()
+    # One-time migration: import legacy returns.csv into returns table if empty
+    try:
+        migrate_returns_csv_to_db()
+    except Exception:
+        pass
     return conn
 
 
@@ -1586,48 +1612,112 @@ def get_monthly_sales_profit(year: int):
             'gross_profit': float(r['gross_profit'] or 0.0),
             'items_sold': float(r['items_sold'] or 0.0),
         }
+    # Apply returns adjustments (prefer DB table, fallback to CSV)
     try:
-        if RETURNS_CSV.exists():
-            import csv as _csv
-            with RETURNS_CSV.open('r', newline='') as _f:
-                rdr = _csv.DictReader(_f)
-                for rr in rdr:
+        conn2 = get_conn()
+        cur2 = conn2.cursor()
+        cur2.execute("SELECT COUNT(1) AS c FROM returns")
+        has_returns = (cur2.fetchone() or {}).get('c', 0) > 0
+        conn2.close()
+    except Exception:
+        has_returns = False
+
+    if has_returns:
+        try:
+            conn2 = get_conn()
+            cur2 = conn2.cursor()
+            cur2.execute('''
+                SELECT return_date, strftime('%Y-%m', return_date) as ym, product_id,
+                       COALESCE(refund_amount_base, 0) as refund_amount_base,
+                       COALESCE(restock, 0) as restock
+                FROM returns
+                WHERE strftime('%Y', return_date) = ?
+            ''', (str(year),))
+            for rr in cur2.fetchall():
+                ym = rr['ym']
+                pid = rr['product_id']
+                refund_amt = float(rr['refund_amount_base'] or 0.0)
+                restock_flag = 1 if int(rr['restock'] or 0) else 0
+                bucket = result.setdefault(ym, {'revenue': 0.0, 'cogs': 0.0, 'gross_profit': 0.0, 'items_sold': 0.0})
+                bucket['revenue'] -= refund_amt
+                bucket['items_sold'] -= 1.0
+                if restock_flag and pid:
                     try:
-                        rd = (rr.get('ReturnDate') or '').strip()
-                        ym = rd[:7] if rd else None
-                        if not ym or not (str(year) == ym[:4]):
-                            continue
-                        refund_amt = float(rr.get('RefundAmount') or 0)
-                        restock = str(rr.get('Restock') or '0').strip()
-                        restock_flag = 1 if restock in ('1','true','True','YES','yes') else 0
-                        pid = rr.get('ProductID')
-                        bucket = result.setdefault(ym, {'revenue': 0.0, 'cogs': 0.0, 'gross_profit': 0.0, 'items_sold': 0.0})
-                        bucket['revenue'] -= refund_amt
-                        bucket['items_sold'] -= 1.0
-                        if restock_flag and pid:
-                            try:
-                                conn2 = get_conn()
-                                cur2 = conn2.cursor()
-                                cur2.execute('''
-                                    SELECT 
-                                        SUM(COALESCE(sba.quantity_from_batch,0)) AS tq,
-                                        SUM(COALESCE(NULLIF(sba.unit_cost,0), ib.unit_cost_orig, ib.unit_cost, 0) * COALESCE(sba.quantity_from_batch,0)) AS tc
-                                    FROM sale_batch_allocations sba
-                                    LEFT JOIN import_batches ib ON sba.batch_id = ib.id
-                                    WHERE sba.product_id = ?
-                                ''', (pid,))
-                                rowc = cur2.fetchone()
-                                conn2.close()
-                                tq = float(rowc['tq'] or 0.0) if rowc else 0.0
-                                tc = float(rowc['tc'] or 0.0) if rowc else 0.0
-                                per_unit = (tc / tq) if tq > 0 else 0.0
-                                bucket['cogs'] -= per_unit
-                            except Exception:
-                                pass
+                        conn3 = get_conn()
+                        cur3 = conn3.cursor()
+                        cur3.execute('''
+                            SELECT 
+                                SUM(COALESCE(sba.quantity_from_batch,0)) AS tq,
+                                SUM(COALESCE(NULLIF(sba.unit_cost,0), ib.unit_cost_orig, ib.unit_cost, 0) * COALESCE(sba.quantity_from_batch,0)) AS tc
+                            FROM sale_batch_allocations sba
+                            LEFT JOIN import_batches ib ON sba.batch_id = ib.id
+                            WHERE sba.product_id = ?
+                        ''', (pid,))
+                        rowc = cur3.fetchone()
+                        conn3.close()
+                        tq = float(rowc['tq'] or 0.0) if rowc else 0.0
+                        tc = float(rowc['tc'] or 0.0) if rowc else 0.0
+                        per_unit = (tc / tq) if tq > 0 else 0.0
+                        bucket['cogs'] -= per_unit
                     except Exception:
                         pass
-    except Exception:
-        pass
+        except Exception:
+            pass
+    else:
+        # Fallback to CSV (legacy)
+        try:
+            if RETURNS_CSV.exists():
+                import csv as _csv
+                with RETURNS_CSV.open('r', newline='') as _f:
+                    rdr = _csv.DictReader(_f)
+                    for rr in rdr:
+                        try:
+                            rd = (rr.get('ReturnDate') or '').strip()
+                            ym = rd[:7] if rd else None
+                            if not ym or not (str(year) == ym[:4]):
+                                continue
+                            # If RefundCurrency provided, convert to base; else assume already base
+                            refund_amt_raw = float(rr.get('RefundAmount') or 0)
+                            refund_ccy = (rr.get('RefundCurrency') or '').strip().upper()
+                            if refund_ccy:
+                                try:
+                                    base = get_base_currency()
+                                    conv = convert_amount(rd, refund_amt_raw, refund_ccy, base)
+                                    refund_amt = float(conv or 0.0)
+                                except Exception:
+                                    refund_amt = refund_amt_raw
+                            else:
+                                refund_amt = refund_amt_raw
+                            restock = str(rr.get('Restock') or '0').strip()
+                            restock_flag = 1 if restock in ('1','true','True','YES','yes') else 0
+                            pid = rr.get('ProductID')
+                            bucket = result.setdefault(ym, {'revenue': 0.0, 'cogs': 0.0, 'gross_profit': 0.0, 'items_sold': 0.0})
+                            bucket['revenue'] -= refund_amt
+                            bucket['items_sold'] -= 1.0
+                            if restock_flag and pid:
+                                try:
+                                    conn2 = get_conn()
+                                    cur2 = conn2.cursor()
+                                    cur2.execute('''
+                                        SELECT 
+                                            SUM(COALESCE(sba.quantity_from_batch,0)) AS tq,
+                                            SUM(COALESCE(NULLIF(sba.unit_cost,0), ib.unit_cost_orig, ib.unit_cost, 0) * COALESCE(sba.quantity_from_batch,0)) AS tc
+                                        FROM sale_batch_allocations sba
+                                        LEFT JOIN import_batches ib ON sba.batch_id = ib.id
+                                        WHERE sba.product_id = ?
+                                    ''', (pid,))
+                                    rowc = cur2.fetchone()
+                                    conn2.close()
+                                    tq = float(rowc['tq'] or 0.0) if rowc else 0.0
+                                    tc = float(rowc['tc'] or 0.0) if rowc else 0.0
+                                    per_unit = (tc / tq) if tq > 0 else 0.0
+                                    bucket['cogs'] -= per_unit
+                                except Exception:
+                                    pass
+                        except Exception:
+                            pass
+        except Exception:
+            pass
     for k, v in result.items():
         v['gross_profit'] = float(v.get('revenue', 0.0)) - float(v.get('cogs', 0.0))
     return result
@@ -1708,48 +1798,110 @@ def get_yearly_sales_profit():
         'gross_profit': float(r['gross_profit'] or 0.0),
         'items_sold': float(r['items_sold'] or 0.0),
     } for r in rows}
+    # Apply returns adjustments (prefer DB table, fallback to CSV)
     try:
-        if RETURNS_CSV.exists():
-            import csv as _csv
-            with RETURNS_CSV.open('r', newline='') as _f:
-                rdr = _csv.DictReader(_f)
-                for rr in rdr:
+        conn2 = get_conn()
+        cur2 = conn2.cursor()
+        cur2.execute("SELECT COUNT(1) AS c FROM returns")
+        has_returns = (cur2.fetchone() or {}).get('c', 0) > 0
+        conn2.close()
+    except Exception:
+        has_returns = False
+
+    if has_returns:
+        try:
+            conn2 = get_conn()
+            cur2 = conn2.cursor()
+            cur2.execute('''
+                SELECT return_date, strftime('%Y', return_date) as y, product_id,
+                       COALESCE(refund_amount_base, 0) as refund_amount_base,
+                       COALESCE(restock, 0) as restock
+                FROM returns
+            ''')
+            for rr in cur2.fetchall():
+                y = rr['y']
+                pid = rr['product_id']
+                refund_amt = float(rr['refund_amount_base'] or 0.0)
+                restock_flag = 1 if int(rr['restock'] or 0) else 0
+                bucket = base_res.setdefault(y, {'revenue': 0.0, 'cogs': 0.0, 'gross_profit': 0.0, 'items_sold': 0.0})
+                bucket['revenue'] -= refund_amt
+                bucket['items_sold'] -= 1.0
+                if restock_flag and pid:
                     try:
-                        rd = (rr.get('ReturnDate') or '').strip()
-                        y = rd[:4] if rd else None
-                        if not y:
-                            continue
-                        refund_amt = float(rr.get('RefundAmount') or 0)
-                        restock = str(rr.get('Restock') or '0').strip()
-                        restock_flag = 1 if restock in ('1','true','True','YES','yes') else 0
-                        pid = rr.get('ProductID')
-                        bucket = base_res.setdefault(y, {'revenue': 0.0, 'cogs': 0.0, 'gross_profit': 0.0, 'items_sold': 0.0})
-                        bucket['revenue'] -= refund_amt
-                        bucket['items_sold'] -= 1.0
-                        if restock_flag and pid:
-                            try:
-                                conn2 = get_conn()
-                                cur2 = conn2.cursor()
-                                cur2.execute('''
-                                    SELECT 
-                                        SUM(COALESCE(sba.quantity_from_batch,0)) AS tq,
-                                        SUM(COALESCE(NULLIF(sba.unit_cost,0), ib.unit_cost_orig, ib.unit_cost, 0) * COALESCE(sba.quantity_from_batch,0)) AS tc
-                                    FROM sale_batch_allocations sba
-                                    LEFT JOIN import_batches ib ON sba.batch_id = ib.id
-                                    WHERE sba.product_id = ?
-                                ''', (pid,))
-                                rowc = cur2.fetchone()
-                                conn2.close()
-                                tq = float(rowc['tq'] or 0.0) if rowc else 0.0
-                                tc = float(rowc['tc'] or 0.0) if rowc else 0.0
-                                per_unit = (tc / tq) if tq > 0 else 0.0
-                                bucket['cogs'] -= per_unit
-                            except Exception:
-                                pass
+                        conn3 = get_conn()
+                        cur3 = conn3.cursor()
+                        cur3.execute('''
+                            SELECT 
+                                SUM(COALESCE(sba.quantity_from_batch,0)) AS tq,
+                                SUM(COALESCE(NULLIF(sba.unit_cost,0), ib.unit_cost_orig, ib.unit_cost, 0) * COALESCE(sba.quantity_from_batch,0)) AS tc
+                            FROM sale_batch_allocations sba
+                            LEFT JOIN import_batches ib ON sba.batch_id = ib.id
+                            WHERE sba.product_id = ?
+                        ''', (pid,))
+                        rowc = cur3.fetchone()
+                        conn3.close()
+                        tq = float(rowc['tq'] or 0.0) if rowc else 0.0
+                        tc = float(rowc['tc'] or 0.0) if rowc else 0.0
+                        per_unit = (tc / tq) if tq > 0 else 0.0
+                        bucket['cogs'] -= per_unit
                     except Exception:
                         pass
-    except Exception:
-        pass
+        except Exception:
+            pass
+    else:
+        # Fallback to CSV (legacy)
+        try:
+            if RETURNS_CSV.exists():
+                import csv as _csv
+                with RETURNS_CSV.open('r', newline='') as _f:
+                    rdr = _csv.DictReader(_f)
+                    for rr in rdr:
+                        try:
+                            rd = (rr.get('ReturnDate') or '').strip()
+                            y = rd[:4] if rd else None
+                            if not y:
+                                continue
+                            refund_amt_raw = float(rr.get('RefundAmount') or 0)
+                            refund_ccy = (rr.get('RefundCurrency') or '').strip().upper()
+                            if refund_ccy:
+                                try:
+                                    base = get_base_currency()
+                                    conv = convert_amount(rd, refund_amt_raw, refund_ccy, base)
+                                    refund_amt = float(conv or 0.0)
+                                except Exception:
+                                    refund_amt = refund_amt_raw
+                            else:
+                                refund_amt = refund_amt_raw
+                            restock = str(rr.get('Restock') or '0').strip()
+                            restock_flag = 1 if restock in ('1','true','True','YES','yes') else 0
+                            pid = rr.get('ProductID')
+                            bucket = base_res.setdefault(y, {'revenue': 0.0, 'cogs': 0.0, 'gross_profit': 0.0, 'items_sold': 0.0})
+                            bucket['revenue'] -= refund_amt
+                            bucket['items_sold'] -= 1.0
+                            if restock_flag and pid:
+                                try:
+                                    conn2 = get_conn()
+                                    cur2 = conn2.cursor()
+                                    cur2.execute('''
+                                        SELECT 
+                                            SUM(COALESCE(sba.quantity_from_batch,0)) AS tq,
+                                            SUM(COALESCE(NULLIF(sba.unit_cost,0), ib.unit_cost_orig, ib.unit_cost, 0) * COALESCE(sba.quantity_from_batch,0)) AS tc
+                                        FROM sale_batch_allocations sba
+                                        LEFT JOIN import_batches ib ON sba.batch_id = ib.id
+                                        WHERE sba.product_id = ?
+                                    ''', (pid,))
+                                    rowc = cur2.fetchone()
+                                    conn2.close()
+                                    tq = float(rowc['tq'] or 0.0) if rowc else 0.0
+                                    tc = float(rowc['tc'] or 0.0) if rowc else 0.0
+                                    per_unit = (tc / tq) if tq > 0 else 0.0
+                                    bucket['cogs'] -= per_unit
+                                except Exception:
+                                    pass
+                        except Exception:
+                            pass
+        except Exception:
+            pass
     for y, v in base_res.items():
         v['gross_profit'] = float(v.get('revenue', 0.0)) - float(v.get('cogs', 0.0))
     return base_res
@@ -1783,6 +1935,58 @@ def get_yearly_expenses():
 
 def get_monthly_return_impact(year: int):
     out = {}
+    # Prefer DB table
+    try:
+        conn2 = get_conn()
+        cur2 = conn2.cursor()
+        cur2.execute("SELECT COUNT(1) AS c FROM returns")
+        has_returns = (cur2.fetchone() or {}).get('c', 0) > 0
+        conn2.close()
+    except Exception:
+        has_returns = False
+
+    if has_returns:
+        try:
+            conn2 = get_conn()
+            cur2 = conn2.cursor()
+            cur2.execute('''
+                SELECT strftime('%Y-%m', return_date) as ym, product_id,
+                       COALESCE(refund_amount_base, 0) as refund_amount_base,
+                       COALESCE(restock, 0) as restock
+                FROM returns
+                WHERE strftime('%Y', return_date) = ?
+            ''', (str(year),))
+            for rr in cur2.fetchall():
+                ym = rr['ym']
+                bucket = out.setdefault(ym, {'returns_refunds': 0.0, 'returns_cogs_reversed': 0.0, 'items_returned': 0.0})
+                bucket['returns_refunds'] += float(rr['refund_amount_base'] or 0.0)
+                bucket['items_returned'] += 1.0
+                if int(rr['restock'] or 0):
+                    pid = rr['product_id']
+                    if pid:
+                        try:
+                            conn3 = get_conn()
+                            cur3 = conn3.cursor()
+                            cur3.execute('''
+                                SELECT 
+                                    SUM(COALESCE(sba.quantity_from_batch,0)) AS tq,
+                                    SUM(COALESCE(NULLIF(sba.unit_cost,0), ib.unit_cost_orig, ib.unit_cost, 0) * COALESCE(sba.quantity_from_batch,0)) AS tc
+                                FROM sale_batch_allocations sba
+                                LEFT JOIN import_batches ib ON sba.batch_id = ib.id
+                                WHERE sba.product_id = ?
+                            ''', (pid,))
+                            rowc = cur3.fetchone()
+                            conn3.close()
+                            tq = float(rowc['tq'] or 0.0) if rowc else 0.0
+                            tc = float(rowc['tc'] or 0.0) if rowc else 0.0
+                            per_unit = (tc / tq) if tq > 0 else 0.0
+                            bucket['returns_cogs_reversed'] += per_unit
+                        except Exception:
+                            pass
+        except Exception:
+            return out
+        return out
+    # Fallback to CSV
     try:
         if not RETURNS_CSV.exists():
             return out
@@ -1796,9 +2000,19 @@ def get_monthly_return_impact(year: int):
                 ym = rd[:7]
                 bucket = out.setdefault(ym, {'returns_refunds': 0.0, 'returns_cogs_reversed': 0.0, 'items_returned': 0.0})
                 try:
-                    refund_amt = float(rr.get('RefundAmount') or 0)
+                    refund_amt_raw = float(rr.get('RefundAmount') or 0)
                 except Exception:
-                    refund_amt = 0.0
+                    refund_amt_raw = 0.0
+                refund_ccy = (rr.get('RefundCurrency') or '').strip().upper()
+                if refund_ccy:
+                    try:
+                        base = get_base_currency()
+                        conv = convert_amount(rd, refund_amt_raw, refund_ccy, base)
+                        refund_amt = float(conv or 0.0)
+                    except Exception:
+                        refund_amt = refund_amt_raw
+                else:
+                    refund_amt = refund_amt_raw
                 bucket['returns_refunds'] += refund_amt
                 bucket['items_returned'] += 1.0
                 restock = str(rr.get('Restock') or '0').strip()
@@ -1831,6 +2045,57 @@ def get_monthly_return_impact(year: int):
 
 def get_yearly_return_impact():
     out = {}
+    # Prefer DB table
+    try:
+        conn2 = get_conn()
+        cur2 = conn2.cursor()
+        cur2.execute("SELECT COUNT(1) AS c FROM returns")
+        has_returns = (cur2.fetchone() or {}).get('c', 0) > 0
+        conn2.close()
+    except Exception:
+        has_returns = False
+
+    if has_returns:
+        try:
+            conn2 = get_conn()
+            cur2 = conn2.cursor()
+            cur2.execute('''
+                SELECT strftime('%Y', return_date) as y, product_id,
+                       COALESCE(refund_amount_base, 0) as refund_amount_base,
+                       COALESCE(restock, 0) as restock
+                FROM returns
+            ''')
+            for rr in cur2.fetchall():
+                y = rr['y']
+                bucket = out.setdefault(y, {'returns_refunds': 0.0, 'returns_cogs_reversed': 0.0, 'items_returned': 0.0})
+                bucket['returns_refunds'] += float(rr['refund_amount_base'] or 0.0)
+                bucket['items_returned'] += 1.0
+                if int(rr['restock'] or 0):
+                    pid = rr['product_id']
+                    if pid:
+                        try:
+                            conn3 = get_conn()
+                            cur3 = conn3.cursor()
+                            cur3.execute('''
+                                SELECT 
+                                    SUM(COALESCE(sba.quantity_from_batch,0)) AS tq,
+                                    SUM(COALESCE(NULLIF(sba.unit_cost,0), ib.unit_cost_orig, ib.unit_cost, 0) * COALESCE(sba.quantity_from_batch,0)) AS tc
+                                FROM sale_batch_allocations sba
+                                LEFT JOIN import_batches ib ON sba.batch_id = ib.id
+                                WHERE sba.product_id = ?
+                            ''', (pid,))
+                            rowc = cur3.fetchone()
+                            conn3.close()
+                            tq = float(rowc['tq'] or 0.0) if rowc else 0.0
+                            tc = float(rowc['tc'] or 0.0) if rowc else 0.0
+                            per_unit = (tc / tq) if tq > 0 else 0.0
+                            bucket['returns_cogs_reversed'] += per_unit
+                        except Exception:
+                            pass
+        except Exception:
+            return out
+        return out
+    # Fallback to CSV
     try:
         if not RETURNS_CSV.exists():
             return out
@@ -1844,9 +2109,19 @@ def get_yearly_return_impact():
                 y = rd[:4]
                 bucket = out.setdefault(y, {'returns_refunds': 0.0, 'returns_cogs_reversed': 0.0, 'items_returned': 0.0})
                 try:
-                    refund_amt = float(rr.get('RefundAmount') or 0)
+                    refund_amt_raw = float(rr.get('RefundAmount') or 0)
                 except Exception:
-                    refund_amt = 0.0
+                    refund_amt_raw = 0.0
+                refund_ccy = (rr.get('RefundCurrency') or '').strip().upper()
+                if refund_ccy:
+                    try:
+                        base = get_base_currency()
+                        conv = convert_amount(rd, refund_amt_raw, refund_ccy, base)
+                        refund_amt = float(conv or 0.0)
+                    except Exception:
+                        refund_amt = refund_amt_raw
+                else:
+                    refund_amt = refund_amt_raw
                 bucket['returns_refunds'] += refund_amt
                 bucket['items_returned'] += 1.0
                 restock = str(rr.get('Restock') or '0').strip()
@@ -1966,6 +2241,285 @@ def build_yearly_summary():
         })
     return rows
 
+
+# ---------------- RETURNS MIGRATION (CSV -> DB) ----------------
+def migrate_returns_csv_to_db():
+    """If returns table is empty and returns.csv exists, import rows and compute refund_amount_base.
+    Refund currency is taken from RefundCurrency column if present; otherwise from default sale currency.
+    """
+    try:
+        conn = get_conn()
+        cur = conn.cursor()
+        # Verify table exists
+        cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='returns'")
+        if not cur.fetchone():
+            conn.close()
+            return
+        cur.execute("SELECT COUNT(1) AS c FROM returns")
+        if (cur.fetchone() or {}).get('c', 0) > 0:
+            conn.close()
+            return
+        # No rows yet; migrate if CSV exists
+        if not RETURNS_CSV.exists():
+            conn.close()
+            return
+        import csv as _csv, json as _json
+        base = get_base_currency()
+        inserted = 0
+        with RETURNS_CSV.open('r', newline='') as f:
+            rdr = _csv.DictReader(f)
+            for rr in rdr:
+                rd = (rr.get('ReturnDate') or '').strip()
+                if not rd:
+                    continue
+                pid = (rr.get('ProductID') or '').strip()
+                sale_date = (rr.get('SaleDate') or '').strip()
+                category = (rr.get('Category') or '').strip()
+                subcategory = (rr.get('Subcategory') or '').strip()
+                platform = (rr.get('Platform') or '').strip()
+                reason = (rr.get('Reason') or '').strip()
+                try:
+                    unit_price = float(rr.get('UnitPrice') or 0.0)
+                except Exception:
+                    unit_price = 0.0
+                try:
+                    selling_price = float(rr.get('SellingPrice') or 0.0)
+                except Exception:
+                    selling_price = 0.0
+                try:
+                    refund_amount = float(rr.get('RefundAmount') or 0.0)
+                except Exception:
+                    refund_amount = 0.0
+                restock_val = str(rr.get('Restock') or '0').strip()
+                restock = 1 if restock_val in ('1','true','True','YES','yes') else 0
+                refund_ccy = (rr.get('RefundCurrency') or '').strip().upper() or get_default_sale_currency()
+                # Convert refund to base
+                try:
+                    conv = convert_amount(rd, refund_amount, refund_ccy, base)
+                    refund_base = float(conv) if conv is not None else (refund_amount if refund_ccy == base else 0.0)
+                except Exception:
+                    refund_base = refund_amount if refund_ccy == base else 0.0
+                # Document paths
+                doc_paths_raw = (rr.get('ReturnDocPath') or '').strip()
+                doc_paths = ''
+                if doc_paths_raw:
+                    try:
+                        # If it's a JSON array already, keep it; else wrap single path
+                        _ = _json.loads(doc_paths_raw)
+                        doc_paths = doc_paths_raw
+                    except Exception:
+                        doc_paths = _json.dumps([doc_paths_raw], ensure_ascii=False)
+                cur.execute('''
+                    INSERT INTO returns (
+                        return_date, product_id, sale_date, category, subcategory, unit_price, selling_price,
+                        platform, refund_amount, refund_currency, refund_amount_base, restock, reason, doc_paths
+                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                ''', (rd, pid, sale_date, category, subcategory, unit_price, selling_price, platform,
+                      refund_amount, refund_ccy, refund_base, restock, reason, doc_paths))
+                inserted += 1
+        conn.commit()
+        conn.close()
+        return inserted
+    except Exception:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        return 0
+
+
+# ---------------- RETURNS CRUD HELPERS ----------------
+def list_returns():
+    """Return all returns with refund amounts in base currency."""
+    try:
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute('''
+            SELECT id, return_date, product_id, sale_date, category, subcategory,
+                   unit_price, selling_price, platform, refund_amount, refund_currency,
+                   refund_amount_base, restock, reason, doc_paths
+            FROM returns
+            ORDER BY return_date DESC, id DESC
+        ''')
+        rows = cur.fetchall()
+        conn.close()
+        return rows
+    except Exception:
+        return []
+
+
+def insert_return(fields: Dict[str, Any]) -> Optional[int]:
+    """Insert a new return row and compute refund_amount_base.
+    Expects keys: return_date, product_id, sale_date, category, subcategory,
+    unit_price, selling_price, platform, refund_amount, refund_currency,
+    restock, reason, doc_paths (string JSON or list/single path).
+    Returns the new id or None on failure.
+    """
+    try:
+        # Normalize inputs
+        rd = str(fields.get('return_date') or fields.get('ReturnDate') or '').strip()
+        pid = str(fields.get('product_id') or fields.get('ProductID') or '').strip()
+        sale_date = str(fields.get('sale_date') or fields.get('SaleDate') or '').strip()
+        category = str(fields.get('category') or fields.get('Category') or '').strip()
+        subcategory = str(fields.get('subcategory') or fields.get('Subcategory') or '').strip()
+        platform = str(fields.get('platform') or fields.get('Platform') or '').strip()
+        reason = fields.get('reason', fields.get('Reason', ''))
+        try:
+            unit_price = float(fields.get('unit_price', fields.get('UnitPrice', 0.0)) or 0.0)
+        except Exception:
+            unit_price = 0.0
+        try:
+            selling_price = float(fields.get('selling_price', fields.get('SellingPrice', 0.0)) or 0.0)
+        except Exception:
+            selling_price = 0.0
+        try:
+            refund_amount = float(fields.get('refund_amount', fields.get('RefundAmount', 0.0)) or 0.0)
+        except Exception:
+            refund_amount = 0.0
+        refund_currency = str(fields.get('refund_currency', fields.get('RefundCurrency', '')).upper() or get_default_sale_currency())
+        # restock may be bool/int/str
+        restock = fields.get('restock', fields.get('Restock', 0))
+        try:
+            restock = 1 if str(restock).strip() in ('1','true','True','YES','yes') else 0
+        except Exception:
+            restock = 0
+        # doc paths: accept JSON string, list, or single string
+        doc_paths_val = fields.get('doc_paths', fields.get('ReturnDocPath', ''))
+        import json as _json
+        doc_paths: str
+        if isinstance(doc_paths_val, list):
+            doc_paths = _json.dumps([str(x) for x in doc_paths_val if str(x).strip()], ensure_ascii=False)
+        elif isinstance(doc_paths_val, str):
+            dp = doc_paths_val.strip()
+            if not dp:
+                doc_paths = ''
+            else:
+                # if it's already JSON, keep; else wrap single path
+                try:
+                    _ = _json.loads(dp)
+                    doc_paths = dp
+                except Exception:
+                    doc_paths = _json.dumps([dp], ensure_ascii=False)
+        else:
+            doc_paths = ''
+
+        refund_base = _compute_refund_base(rd, refund_amount, refund_currency)
+
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute('''
+            INSERT INTO returns (
+                return_date, product_id, sale_date, category, subcategory,
+                unit_price, selling_price, platform, refund_amount,
+                refund_currency, refund_amount_base, restock, reason, doc_paths
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        ''', (rd, pid, sale_date, category, subcategory, float(unit_price or 0.0), float(selling_price or 0.0),
+              platform, float(refund_amount or 0.0), refund_currency or None, float(refund_base or 0.0), int(restock or 0), reason, doc_paths))
+        new_id = cur.lastrowid
+        conn.commit()
+        conn.close()
+        return int(new_id)
+    except Exception:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        return None
+
+
+def _compute_refund_base(return_date: str, refund_amount: float, refund_currency: str) -> float:
+    base = get_base_currency()
+    try:
+        conv = convert_amount(return_date, float(refund_amount or 0.0), (refund_currency or base).upper(), base)
+        return float(conv) if conv is not None else (float(refund_amount or 0.0) if (refund_currency or base).upper() == base else 0.0)
+    except Exception:
+        return float(refund_amount or 0.0) if (refund_currency or base).upper() == base else 0.0
+
+
+def update_return(ret_id: int, fields: Dict[str, Any]) -> bool:
+    """Update a return row; if ReturnDate/RefundAmount/RefundCurrency change, recompute refund_amount_base."""
+    try:
+        conn = get_conn()
+        cur = conn.cursor()
+        # Fetch current row
+        cur.execute('SELECT * FROM returns WHERE id = ?', (ret_id,))
+        curr = cur.fetchone()
+        if not curr:
+            conn.close()
+            return False
+        # Merge
+        rd = str(fields.get('return_date', fields.get('ReturnDate', curr['return_date']) or curr['return_date']))
+        ra = fields.get('refund_amount', fields.get('RefundAmount', curr['refund_amount']))
+        try:
+            ra = float(ra)
+        except Exception:
+            ra = float(curr['refund_amount'] or 0.0)
+        rc = str(fields.get('refund_currency', fields.get('RefundCurrency', curr['refund_currency']) or '')).upper()
+        restock = fields.get('restock', fields.get('Restock', curr['restock']))
+        try:
+            restock = 1 if str(restock).strip() in ('1','true','True','YES','yes') else 0
+        except Exception:
+            restock = int(curr['restock'] or 0)
+        reason = fields.get('reason', fields.get('Reason', curr['reason']))
+        doc_paths = fields.get('doc_paths', fields.get('ReturnDocPath', curr['doc_paths']))
+        refund_base = _compute_refund_base(rd, ra, rc or get_default_sale_currency())
+        # Build update
+        cur.execute('''
+            UPDATE returns
+            SET return_date=?, refund_amount=?, refund_currency=?, refund_amount_base=?,
+                restock=?, reason=?, doc_paths=?
+            WHERE id=?
+        ''', (rd, float(ra or 0.0), rc or None, float(refund_base or 0.0), int(restock or 0), reason, doc_paths, ret_id))
+        conn.commit()
+        conn.close()
+        return True
+    except Exception:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        return False
+
+
+def delete_return(ret_id: int) -> bool:
+    try:
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute('DELETE FROM returns WHERE id = ?', (ret_id,))
+        conn.commit()
+        conn.close()
+        return True
+    except Exception:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        return False
+
+
+def get_distinct_return_reasons(limit: int = 200) -> list:
+    """Return a list of distinct non-empty reasons from returns, ordered alphabetically.
+    Limited to a reasonable number to keep UI snappy.
+    """
+    try:
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT DISTINCT TRIM(reason) AS r
+            FROM returns
+            WHERE reason IS NOT NULL AND TRIM(reason) <> ''
+            ORDER BY r
+            LIMIT ?
+        """, (int(limit or 200),))
+        out = [row[0] for row in cur.fetchall() if row and row[0]]
+        conn.close()
+        return out
+    except Exception:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        return []
 
 # ---------------- CUSTOMER MANAGEMENT ----------------
 CUSTOMERS_CSV = DATA_DIR / "customers.csv"

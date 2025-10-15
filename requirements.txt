@@ -1,2 +1,8 @@
-# Optional UI theme. App runs without it; install to get nicer visuals.
+numpy==2.3.3
+pandas==2.3.3
+pillow==11.3.0
+python-dateutil==2.9.0.post0
+pytz==2025.2
+six==1.17.0
 ttkbootstrap==1.14.7
+tzdata==2025.2

@@ -16,7 +16,7 @@ from ui.batch_analytics_window import open_batch_analytics_window
 from ui.customers_window import open_customers_window
 from ui.suppliers_window import open_suppliers_window
 from ui.monthly_yearly_analytics_window import open_monthly_yearly_analytics_window
-from ui.theme import apply_theme, maximize_window, themed_button, add_buttons
+from ui.theme import apply_theme, maximize_window, themed_button, add_buttons, install_basic_shortcuts
 from ui.login_window import open_login_dialog
 from ui.audit_log_window import open_audit_log_window
 from ui.backup_window import open_backup_window
@@ -30,12 +30,17 @@ def main():
     root.geometry("980x720")
     root.minsize(880, 600)
     apply_theme(root)
+    # Global keyboard shortcuts (Ctrl/Cmd + A/C/X/V, S, Q, Esc)
+    install_basic_shortcuts(root)
     try:
         maximize_window(root)
     except Exception:
         pass
     if not open_login_dialog(root):
-        root.destroy()
+        try:
+            root.destroy()
+        except tk.TclError:
+            pass
         return
     menubar = tk.Menu(root)
     file_menu = tk.Menu(menubar, tearoff=0)
@@ -173,11 +178,11 @@ def main():
     admin_btns = ttk.Frame(admin_panel)
     admin_btns.pack(fill='x')
     themed_button(admin_btns, text='\u2699\ufe0f Settings', variant='secondary', width=HOME_BTN_WIDTH, command=lambda: open_settings_window(root)).pack(side='left', padx=(0, 6))
-    themed_button(admin_btns, text='\ud83d\udd22 Product Codes', variant='secondary', width=HOME_BTN_WIDTH, command=lambda: open_manage_product_codes_window(root)).pack(side='left', padx=6)
-    themed_button(admin_btns, text='\ud83d\udc65 Customers', variant='secondary', width=HOME_BTN_WIDTH, command=lambda: open_customers_window(root)).pack(side='left', padx=6)
-    themed_button(admin_btns, text='\ud83c\udfe2 Suppliers', variant='secondary', width=HOME_BTN_WIDTH, command=lambda: open_suppliers_window(root)).pack(side='left', padx=6)
-    themed_button(admin_btns, text='\ud83d\udcca Batch Analytics', variant='primary', width=HOME_BTN_WIDTH, command=lambda: open_batch_analytics_window(root)).pack(side='left', padx=6)
-    themed_button(admin_btns, text='\ud83d\udcc8 Monthly/Yearly', variant='secondary', width=HOME_BTN_WIDTH, command=lambda: open_monthly_yearly_analytics_window(root)).pack(side='left', padx=6)
+    themed_button(admin_btns, text='🔢 Product Codes', variant='secondary', width=HOME_BTN_WIDTH, command=lambda: open_manage_product_codes_window(root)).pack(side='left', padx=6)
+    themed_button(admin_btns, text='👥 Customers', variant='secondary', width=HOME_BTN_WIDTH, command=lambda: open_customers_window(root)).pack(side='left', padx=6)
+    themed_button(admin_btns, text='🏢 Suppliers', variant='secondary', width=HOME_BTN_WIDTH, command=lambda: open_suppliers_window(root)).pack(side='left', padx=6)
+    themed_button(admin_btns, text='📊 Batch Analytics', variant='primary', width=HOME_BTN_WIDTH, command=lambda: open_batch_analytics_window(root)).pack(side='left', padx=6)
+    themed_button(admin_btns, text='📈 Monthly/Yearly', variant='secondary', width=HOME_BTN_WIDTH, command=lambda: open_monthly_yearly_analytics_window(root)).pack(side='left', padx=6)
     themed_button(admin_btns, text='Audit Log', variant='secondary', width=HOME_BTN_WIDTH, command=lambda: open_audit_log_window(root)).pack(side='left', padx=6)
     themed_button(admin_btns, text='Backup/Restore', variant='secondary', width=HOME_BTN_WIDTH, command=lambda: open_backup_window(root)).pack(side='left', padx=6)
 

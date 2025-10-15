@@ -1,6 +1,5 @@
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
-import csv
 from pathlib import Path
 import os
 import json
@@ -8,35 +7,14 @@ import sys
 import subprocess
 from .theme import stripe_treeview, maximize_window, apply_theme, themed_button
 
-RETURNS_CSV = Path(__file__).resolve().parents[2] / 'data' / 'returns.csv'
+from db.db import list_returns as db_list_returns, update_return as db_update_return, delete_return as db_delete_return
 
-DESIRED = ['ReturnDate', 'ProductID', 'SaleDate', 'Category', 'Subcategory', 'UnitPrice', 'SellingPrice', 'Platform', 'RefundAmount', 'Restock', 'Reason', 'ReturnDocPath']
-
-
-def ensure_returns_csv():
-    RETURNS_CSV.parent.mkdir(parents=True, exist_ok=True)
-    if not RETURNS_CSV.exists():
-        with RETURNS_CSV.open('w', newline='') as f:
-            csv.writer(f).writerow(DESIRED)
-
-
-def read_returns():
-    ensure_returns_csv()
-    with RETURNS_CSV.open('r', newline='') as f:
-        return list(csv.DictReader(f))
-
-
-def write_returns(rows):
-    ensure_returns_csv()
-    with RETURNS_CSV.open('w', newline='') as f:
-        w = csv.DictWriter(f, fieldnames=DESIRED)
-        w.writeheader()
-        for r in rows:
-            w.writerow({k: r.get(k, '') for k in DESIRED})
+# Columns from DB (read-only ones are disabled in edit).
+DB_COLS = ['id', 'return_date', 'product_id', 'sale_date', 'category', 'subcategory', 'unit_price', 'selling_price', 'platform', 'refund_amount', 'refund_currency', 'refund_amount_base', 'restock', 'reason', 'doc_paths']
 
 
 def open_view_returns_window(root):
-    rows = read_returns()
+    rows = db_list_returns()
     if not rows:
         messagebox.showinfo('No data', 'No returns found.')
         return
@@ -65,7 +43,7 @@ def open_view_returns_window(root):
     search_entry.pack(side=tk.LEFT)
     filter_frame.pack(fill='x', pady=6)
 
-    cols = DESIRED
+    cols = ['id', 'return_date', 'product_id', 'sale_date', 'category', 'subcategory', 'unit_price', 'selling_price', 'platform', 'refund_amount', 'refund_currency', 'refund_amount_base', 'restock', 'reason', 'doc_paths']
     tree = ttk.Treeview(win, columns=cols, show='headings')
     for c in cols:
         tree.heading(c, text=c)
@@ -124,7 +102,7 @@ def open_view_returns_window(root):
             return True
         ql = q.lower()
         for c in cols:
-            v = str(r.get(c, '')).lower()
+            v = str(r.get(c, '') if isinstance(r, dict) else r.get(c, '')).lower()
             if ql in v:
                 return True
         return False
@@ -153,32 +131,40 @@ def open_view_returns_window(root):
                 cleaned.append(s)
         return json.dumps(cleaned, ensure_ascii=False)
 
+    # cache of latest rows to support edit/delete
+    last_rows = []
+
     def populate():
         for r in tree.get_children():
             tree.delete(r)
         count = 0
         total_refund = 0.0
-        for i, row in enumerate(read_returns()):
-            if row_matches(row, search_var.get().strip()):
-                vals = [row.get(c, '') for c in cols]
+        last_rows.clear()
+        for row in db_list_returns():
+            # Convert sqlite Row to dict if needed
+            rowd = dict(row) if not isinstance(row, dict) else row
+            if row_matches(rowd, search_var.get().strip()):
+                vals = [rowd.get(c, '') for c in cols]
                 try:
-                    idx = cols.index('ReturnDocPath')
-                    doc_list = parse_docs(row.get('ReturnDocPath', ''))
+                    di = cols.index('doc_paths')
+                    doc_list = parse_docs(rowd.get('doc_paths', ''))
                     if len(doc_list) == 0:
-                        vals[idx] = ''
+                        vals[di] = ''
                     elif len(doc_list) == 1:
-                        vals[idx] = doc_list[0]
+                        vals[di] = doc_list[0]
                     else:
-                        vals[idx] = f"{len(doc_list)} docs"
+                        vals[di] = f"{len(doc_list)} docs"
                 except Exception:
                     pass
-                tree.insert('', tk.END, iid=str(i), values=vals)
+                iid = str(rowd.get('id'))
+                tree.insert('', tk.END, iid=iid, values=vals)
+                last_rows.append(rowd)
                 count += 1
                 try:
-                    total_refund += float(row.get('RefundAmount') or 0)
+                    total_refund += float(rowd.get('refund_amount_base') or 0)
                 except Exception:
                     pass
-        totals_var.set(f"Rows: {count}    Total Refund: {total_refund:.2f}")
+        totals_var.set(f"Rows: {count}    Total Refund (base): {total_refund:.2f}")
         try:
             stripe_treeview(tree)
         except Exception:
@@ -194,33 +180,44 @@ def open_view_returns_window(root):
         if not sel:
             return None
         try:
-            return int(sel[0])
+            return sel[0]
         except Exception:
             return None
 
     def do_delete():
-        idx = get_selected_index()
-        if idx is None:
+        iid = get_selected_index()
+        if iid is None:
             messagebox.showwarning('Select', 'Select a row first')
             return
         if not messagebox.askyesno('Confirm', 'Delete selected return?'):
             return
-        rows = read_returns()
-        if 0 <= idx < len(rows):
-            del rows[idx]
-            write_returns(rows)
+        try:
+            rid = int(iid)
+        except Exception:
+            messagebox.showerror('Error', 'Invalid selection', parent=win)
+            return
+        if db_delete_return(rid):
             refresh()
 
     def do_edit():
-        idx = get_selected_index()
-        if idx is None:
+        iid = get_selected_index()
+        if iid is None:
             messagebox.showwarning('Select', 'Select a row first')
             return
-        rows = read_returns()
-        if not (0 <= idx < len(rows)):
-            messagebox.showerror('Error', 'Invalid selection index')
+        try:
+            rid = int(iid)
+        except Exception:
+            messagebox.showerror('Error', 'Invalid selection', parent=win)
             return
-        rec = rows[idx]
+        # locate record in last_rows
+        rec = None
+        for r in last_rows:
+            if int(r.get('id')) == rid:
+                rec = r
+                break
+        if rec is None:
+            messagebox.showerror('Error', 'Selected row not found', parent=win)
+            return
 
         dlg = tk.Toplevel(win)
         dlg.title('Edit Return')
@@ -237,23 +234,68 @@ def open_view_returns_window(root):
             e.pack(pady=2)
             entries[key] = e
 
-        add_field('Return Date (YYYY-MM-DD):', 'ReturnDate')
-        add_field('Product ID:', 'ProductID', disabled=True)
-        add_field('Sale Date:', 'SaleDate', disabled=True)
-        add_field('Category:', 'Category', disabled=True)
-        add_field('Subcategory:', 'Subcategory', disabled=True)
-        add_field('Unit Price:', 'UnitPrice', disabled=True)
-        add_field('Selling Price:', 'SellingPrice', disabled=True)
-        add_field('Platform:', 'Platform', disabled=True)
-        add_field('Refund Amount:', 'RefundAmount')
-        add_field('Restock (1/0):', 'Restock')
-        add_field('Reason:', 'Reason')
+        add_field('Return Date (YYYY-MM-DD):', 'return_date')
+        add_field('Product ID:', 'product_id', disabled=True)
+        add_field('Sale Date:', 'sale_date', disabled=True)
+        add_field('Category:', 'category', disabled=True)
+        add_field('Subcategory:', 'subcategory', disabled=True)
+        add_field('Unit Price:', 'unit_price', disabled=True)
+        add_field('Selling Price:', 'selling_price', disabled=True)
+        add_field('Platform:', 'platform', disabled=True)
+        add_field('Refund Amount:', 'refund_amount')
+        add_field('Refund Currency (e.g., TRY, USD):', 'refund_currency')
+        add_field('Restock (1/0):', 'restock')
+        # Reason with suggestions
+        ttk.Label(dlg, text='Reason:').pack(pady=4)
+        # Suggestions from DB plus defaults
+        try:
+            import db.db as db
+            reasons = db.get_distinct_return_reasons() or []
+        except Exception:
+            reasons = []
+        defaults = ['Defective', 'Damaged in shipping', 'Not as described', 'Changed mind',
+                    'Wrong item sent', 'Missing parts', 'Warranty return', 'Customer complaint']
+        seen = set()
+        suggestions = []
+        for s in reasons + defaults:
+            v = str(s).strip()
+            if v and v not in seen:
+                seen.add(v)
+                suggestions.append(v)
+        reason_var = tk.StringVar(value=str(rec.get('reason','') or ''))
+
+        # Type-ahead filtering: update Combobox values as user types
+        def filter_suggestions(event=None):
+            typed = reason_var.get().strip().lower()
+            filtered = [s for s in suggestions if typed in s.lower()] if typed else suggestions
+            reason_combo['values'] = filtered
+
+        reason_combo = ttk.Combobox(dlg, textvariable=reason_var, values=suggestions, width=38)
+        reason_combo.pack(pady=2, side=tk.LEFT)
+        reason_combo.configure(state='normal')
+        reason_combo.bind('<KeyRelease>', filter_suggestions)
+
+        # '+ Add to defaults' button
+        def add_reason_to_defaults():
+            val = reason_var.get().strip()
+            if val and val not in suggestions:
+                try:
+                    import db.db as db
+                    db.add_return_reason(val)
+                    suggestions.append(val)
+                    reason_combo['values'] = suggestions
+                    tk.messagebox.showinfo('Added', f'"{val}" added to Reason presets.')
+                except Exception:
+                    tk.messagebox.showerror('Error', 'Could not add reason to presets.')
+
+        add_btn = ttk.Button(dlg, text='+ Add to defaults', command=add_reason_to_defaults)
+        add_btn.pack(pady=2, side=tk.LEFT, padx=6)
 
         # DocumentPath with Browse button
         ttk.Label(dlg, text='Return Document (path):').pack(pady=4)
         doc_frame = ttk.Frame(dlg)
         doc_entry = ttk.Entry(doc_frame, width=32)
-        doc_entry.insert(0, str(rec.get('ReturnDocPath', '')))
+        doc_entry.insert(0, str(rec.get('doc_paths', '')))
         doc_entry.pack(side=tk.LEFT, padx=(0, 6))
 
         def browse_doc():
@@ -273,7 +315,7 @@ def open_view_returns_window(root):
 
         def save_edit():
             from datetime import datetime as _dt
-            d = entries['ReturnDate'].get().strip()
+            d = entries['return_date'].get().strip()
             try:
                 _dt.strptime(d, '%Y-%m-%d')
             except Exception:
@@ -281,28 +323,23 @@ def open_view_returns_window(root):
                 return
             # refund amount and restock
             try:
-                refund = float(entries['RefundAmount'].get().strip() or 0)
+                refund = float(entries['refund_amount'].get().strip() or 0)
             except Exception:
                 messagebox.showerror('Invalid', 'RefundAmount must be a number', parent=dlg)
                 return
-            restock_val = entries['Restock'].get().strip()
+            restock_val = entries['restock'].get().strip()
             restock = 1 if restock_val in ('1', 'true', 'True', 'YES', 'yes') else 0
-
-            rows[idx] = {
+            update_ok = db_update_return(rid, {
                 'ReturnDate': d,
-                'ProductID': rec.get('ProductID',''),
-                'SaleDate': rec.get('SaleDate',''),
-                'Category': rec.get('Category',''),
-                'Subcategory': rec.get('Subcategory',''),
-                'UnitPrice': rec.get('UnitPrice',''),
-                'SellingPrice': rec.get('SellingPrice',''),
-                'Platform': rec.get('Platform',''),
                 'RefundAmount': refund,
+                'RefundCurrency': entries['refund_currency'].get().strip().upper() or '',
                 'Restock': restock,
-                'Reason': entries['Reason'].get().strip(),
-                'ReturnDocPath': doc_entry.get().strip(),
-            }
-            write_returns(rows)
+                'Reason': reason_var.get().strip(),
+                'doc_paths': doc_entry.get().strip(),
+            })
+            if not update_ok:
+                messagebox.showerror('Error', 'Failed to update return', parent=dlg)
+                return
             dlg.destroy()
             refresh()
 
@@ -345,13 +382,26 @@ def open_view_returns_window(root):
         if idx is None:
             messagebox.showwarning('Select', 'Select a row first')
             return
-        rows = read_returns()
-        if not (0 <= idx < len(rows)):
-            messagebox.showerror('Error', 'Invalid selection index', parent=win)
+        iid = get_selected_index()
+        if iid is None:
+            messagebox.showwarning('Select', 'Select a row first')
             return
-        rec = rows[idx]
+        try:
+            rid = int(iid)
+        except Exception:
+            messagebox.showerror('Error', 'Invalid selection', parent=win)
+            return
+        rec = None
+        for r in last_rows:
+            if int(r.get('id')) == rid:
+                rec = r
+                break
+        if rec is None:
+            messagebox.showerror('Error', 'Selected row not found', parent=win)
+            return
         pid = rec.get('ProductID','')
-        docs = parse_docs(rec.get('ReturnDocPath',''))
+        pid = rec.get('product_id','')
+        docs = parse_docs(rec.get('doc_paths',''))
 
         dlg = tk.Toplevel(win)
         dlg.title(f'Documents (Return): {pid}')
@@ -423,10 +473,9 @@ def open_view_returns_window(root):
                     pass
 
         def save_and_close():
-            rows2 = read_returns()
-            if 0 <= idx < len(rows2):
-                rows2[idx]['ReturnDocPath'] = format_docs(docs)
-                write_returns(rows2)
+            if not db_update_return(rid, {'doc_paths': format_docs(docs)}):
+                messagebox.showerror('Error', 'Failed to update documents', parent=dlg)
+                return
             dlg.destroy()
             refresh()
 

@@ -24,10 +24,21 @@ def read_sales():
             for r in rows:
                 if 'SellingPriceBase' not in r or not r.get('SellingPriceBase'):
                     r['SellingPriceBase'] = r.get('SellingPriceUSD', '')
+        # Inject SaleCurrency if missing
+        if rows and 'SaleCurrency' not in reader.fieldnames:
+            try:
+                from db.db import get_default_sale_currency as _get_def_sale_ccy
+                _def_ccy = _get_def_sale_ccy()
+            except Exception:
+                _def_ccy = ''
+            for r in rows:
+                if 'SaleCurrency' not in r or not r.get('SaleCurrency'):
+                    r['SaleCurrency'] = _def_ccy
         return rows
 
 
-DESIRED_COLS = ['Date', 'Category', 'Subcategory', 'Quantity', 'UnitPrice', 'SellingPrice', 'Platform', 'ProductID', 'CustomerID', 'DocumentPath', 'SaleFXToTRY', 'SellingPriceBase']
+# Include SaleCurrency to capture the currency in which the sale occurred.
+DESIRED_COLS = ['Date', 'Category', 'Subcategory', 'Quantity', 'UnitPrice', 'SellingPrice', 'Platform', 'ProductID', 'CustomerID', 'DocumentPath', 'SaleFXToTRY', 'SellingPriceBase', 'SaleCurrency']
 
 
 def write_sales(rows):
@@ -40,12 +51,20 @@ def write_sales(rows):
             # Map legacy key if needed
             if 'SellingPriceBase' not in r and 'SellingPriceUSD' in r:
                 r['SellingPriceBase'] = r.get('SellingPriceUSD', '')
+            # Ensure SaleCurrency present
+            if 'SaleCurrency' not in r or not r.get('SaleCurrency'):
+                try:
+                    from db.db import get_default_sale_currency as _get_def_sale_ccy
+                    r['SaleCurrency'] = _get_def_sale_ccy()
+                except Exception:
+                    r['SaleCurrency'] = ''
             w.writerow({c: r.get(c, '') for c in DESIRED_COLS})
 
 
 def ensure_returns_csv():
     RETURNS_CSV.parent.mkdir(parents=True, exist_ok=True)
-    desired = ['ReturnDate', 'ProductID', 'SaleDate', 'Category', 'Subcategory', 'UnitPrice', 'SellingPrice', 'Platform', 'RefundAmount', 'Restock', 'Reason', 'ReturnDocPath']
+    # Include RefundCurrency to support FX-aware refunds
+    desired = ['ReturnDate', 'ProductID', 'SaleDate', 'Category', 'Subcategory', 'UnitPrice', 'SellingPrice', 'Platform', 'RefundAmount', 'RefundCurrency', 'Restock', 'Reason', 'ReturnDocPath']
     if not RETURNS_CSV.exists():
         with RETURNS_CSV.open('w', newline='') as f:
             csv.writer(f).writerow(desired)
@@ -77,6 +96,7 @@ def ensure_returns_csv():
                 'SellingPrice': rowd.get('SellingPrice', ''),
                 'Platform': rowd.get('Platform', ''),
                 'RefundAmount': rowd.get('RefundAmount', ''),
+                'RefundCurrency': rowd.get('RefundCurrency', ''),
                 'Restock': rowd.get('Restock', ''),
                 'Reason': rowd.get('Reason', ''),
                 'ReturnDocPath': rowd.get('ReturnDocPath', ''),
@@ -90,10 +110,35 @@ def ensure_returns_csv():
 
 
 def read_returns():
-    ensure_returns_csv()
-    with RETURNS_CSV.open('r', newline='') as f:
-        reader = csv.DictReader(f)
-        return list(reader)
+    # Prefer DB for returns to reflect real-time state; fallback to CSV only if needed
+    try:
+        import db.db as db
+        rows = db.list_returns()
+        # Map to a CSV-like dict for compatibility where used
+        out = []
+        for r in rows:
+            out.append({
+                'ReturnDate': r.get('return_date',''),
+                'ProductID': r.get('product_id',''),
+                'SaleDate': r.get('sale_date',''),
+                'Category': r.get('category',''),
+                'Subcategory': r.get('subcategory',''),
+                'UnitPrice': r.get('unit_price',''),
+                'SellingPrice': r.get('selling_price',''),
+                'Platform': r.get('platform',''),
+                'RefundAmount': r.get('refund_amount',''),
+                'RefundCurrency': r.get('refund_currency',''),
+                'Restock': r.get('restock',''),
+                'Reason': r.get('reason',''),
+                'ReturnDocPath': r.get('doc_paths',''),
+            })
+        return out
+    except Exception:
+        # Legacy fallback
+        ensure_returns_csv()
+        with RETURNS_CSV.open('r', newline='') as f:
+            reader = csv.DictReader(f)
+            return list(reader)
 
 
 def open_view_sales_window(root):
@@ -490,7 +535,7 @@ def open_view_sales_window(root):
         # Dialog to collect return info
         dlg = tk.Toplevel(win)
         dlg.title('Mark as Returned')
-        dlg.geometry('460x380')
+        dlg.geometry('460x340')
 
         from datetime import datetime as _dt
         ttk.Label(dlg, text='Return Date (YYYY-MM-DD):').pack(pady=4)
@@ -498,17 +543,60 @@ def open_view_sales_window(root):
         date_e.insert(0, _dt.now().strftime('%Y-%m-%d'))
         date_e.pack(pady=2)
 
-        ttk.Label(dlg, text='Refund Amount (optional):').pack(pady=4)
-        refund_e = ttk.Entry(dlg, width=20)
-        refund_e.insert(0, '')
-        refund_e.pack(pady=2)
+        # No manual refund entry; refund will equal SellingPrice in SaleCurrency
 
         restock_var = tk.BooleanVar(value=False)
         ttk.Checkbutton(dlg, text='Restock inventory', variable=restock_var).pack(pady=6)
 
-        ttk.Label(dlg, text='Reason (optional):').pack(pady=4)
-        reason_e = ttk.Entry(dlg, width=40)
-        reason_e.pack(pady=2)
+        ttk.Label(dlg, text='Reason (recommended):').pack(pady=4)
+        reason_frame = ttk.Frame(dlg)
+        reason_frame.pack(pady=2)
+        # Load suggestions: distinct reasons from DB plus common defaults
+        try:
+            import db.db as db
+            db_reasons = db.get_distinct_return_reasons() or []
+        except Exception:
+            db_reasons = []
+        common_defaults = [
+            'Defective', 'Damaged in shipping', 'Not as described', 'Changed mind',
+            'Wrong item sent', 'Missing parts', 'Warranty return', 'Customer complaint'
+        ]
+        # Merge unique values keeping DB reasons first
+        seen = set()
+        suggestions = []
+        for s in db_reasons + common_defaults:
+            v = str(s).strip()
+            if v and v not in seen:
+                seen.add(v)
+                suggestions.append(v)
+        reason_var = tk.StringVar(value='')
+
+        # Type-ahead filtering: update Combobox values as user types
+        def filter_suggestions(event=None):
+            typed = reason_var.get().strip().lower()
+            filtered = [s for s in suggestions if typed in s.lower()] if typed else suggestions
+            reason_combo['values'] = filtered
+
+        reason_combo = ttk.Combobox(reason_frame, textvariable=reason_var, values=suggestions, width=38)
+        reason_combo.pack(side=tk.LEFT)
+        reason_combo.configure(state='normal')
+        reason_combo.bind('<KeyRelease>', filter_suggestions)
+
+        # '+ Add to defaults' button
+        def add_reason_to_defaults():
+            val = reason_var.get().strip()
+            if val and val not in suggestions:
+                try:
+                    import db.db as db
+                    db.add_return_reason(val)
+                    suggestions.append(val)
+                    reason_combo['values'] = suggestions
+                    tk.messagebox.showinfo('Added', f'"{val}" added to Reason presets.')
+                except Exception:
+                    tk.messagebox.showerror('Error', 'Could not add reason to presets.')
+
+        add_btn = ttk.Button(reason_frame, text='+ Add to defaults', command=add_reason_to_defaults)
+        add_btn.pack(side=tk.LEFT, padx=6)
 
         ttk.Label(dlg, text='Attach Document (optional):').pack(pady=4)
         doc_frame = ttk.Frame(dlg)
@@ -536,14 +624,11 @@ def open_view_sales_window(root):
             except Exception:
                 messagebox.showerror('Invalid date', 'Use YYYY-MM-DD', parent=dlg)
                 return
-            refund = None
-            ra = refund_e.get().strip()
-            if ra:
-                try:
-                    refund = float(ra)
-                except Exception:
-                    messagebox.showerror('Invalid amount', 'Refund must be a number', parent=dlg)
-                    return
+            # Refund amount equals sale price automatically
+            try:
+                refund = float(rec.get('SellingPrice') or 0.0)
+            except Exception:
+                refund = 0.0
             try:
                 # Determine restock final decision with confirmation if requested
                 restock_final = 0
@@ -563,23 +648,31 @@ def open_view_sales_window(root):
                     else:
                         restock_final = 0
 
-                ensure_returns_csv()
-                with RETURNS_CSV.open('a', newline='') as f:
-                    w = csv.DictWriter(f, fieldnames=['ReturnDate', 'ProductID', 'SaleDate', 'Category', 'Subcategory', 'UnitPrice', 'SellingPrice', 'Platform', 'RefundAmount', 'Restock', 'Reason', 'ReturnDocPath'])
-                    w.writerow({
-                        'ReturnDate': d,
-                        'ProductID': pid,
-                        'SaleDate': rec.get('Date',''),
-                        'Category': rec.get('Category',''),
-                        'Subcategory': rec.get('Subcategory',''),
-                        'UnitPrice': rec.get('UnitPrice',''),
-                        'SellingPrice': rec.get('SellingPrice',''),
-                        'Platform': rec.get('Platform',''),
-                        'RefundAmount': refund if refund is not None else '',
-                        'Restock': restock_final,
-                        'Reason': reason_e.get().strip(),
-                        'ReturnDocPath': doc_entry.get().strip(),
-                    })
+                # Write return directly into DB
+                import db.db as db
+                # Use SaleCurrency for refund currency; fallback to default if missing
+                refund_ccy = (rec.get('SaleCurrency') or '').strip().upper()
+                if not refund_ccy:
+                    try:
+                        refund_ccy = db.get_default_sale_currency()
+                    except Exception:
+                        refund_ccy = ''
+                # Build fields and insert
+                db.insert_return({
+                    'return_date': d,
+                    'product_id': pid,
+                    'sale_date': rec.get('Date',''),
+                    'category': rec.get('Category',''),
+                    'subcategory': rec.get('Subcategory',''),
+                    'unit_price': rec.get('UnitPrice',''),
+                    'selling_price': rec.get('SellingPrice',''),
+                    'platform': rec.get('Platform',''),
+                    'refund_amount': refund,
+                    'refund_currency': refund_ccy,
+                    'restock': restock_final,
+                    'reason': reason_var.get().strip(),
+                    'doc_paths': doc_entry.get().strip(),
+                })
                 
                 # Show batch restock confirmation
                 if restock_final and restocked_batches:
