@@ -823,9 +823,94 @@ def edit_import(import_id, date, ordered_price, quantity, supplier, notes, categ
             conn.commit()
     except Exception:
         pass
-    rebuild_inventory_from_imports(conn)
+    # Recompute batches for this import to reflect new expense allocation if needed
+    try:
+        recompute_import_batches(import_id)
+    except Exception:
+        # fallback: rebuild inventory and continue
+        try:
+            rebuild_inventory_from_imports(conn)
+        except Exception:
+            pass
     conn.close()
     write_audit('edit', 'import', str(import_id), f"qty=={quantity}; price={ordered_price}")
+
+
+def recompute_import_batches(import_id: int):
+    """
+    Recompute unit costs for batches belonging to a given import_id using the import_lines and import-level expense allocation.
+    This updates import_batches.unit_cost and unit_cost_base based on proportional allocation.
+    """
+    conn = get_conn()
+    cur = conn.cursor()
+    # Load import-level expense settings
+    cur.execute('SELECT total_import_expenses, include_expenses, currency, date FROM imports WHERE id=?', (import_id,))
+    imp = cur.fetchone()
+    if not imp:
+        conn.close()
+        return
+    total_expenses = float(imp['total_import_expenses'] or 0.0)
+    include_flag = int(imp['include_expenses'] or 0)
+    imp_currency = imp['currency'] if 'currency' in imp.keys() else get_default_import_currency()
+    imp_date = imp['date'] if 'date' in imp.keys() else None
+
+    # Load lines for this import
+    cur.execute('SELECT id, category, subcategory, ordered_price, quantity FROM import_lines WHERE import_id=?', (import_id,))
+    lines = [dict(r) for r in cur.fetchall()]
+    if not lines:
+        conn.close()
+        return
+
+    # Compute total order value (in import currency)
+    total_order_value = 0.0
+    for l in lines:
+        try:
+            total_order_value += float(l.get('ordered_price') or 0.0) * float(l.get('quantity') or 0.0)
+        except Exception:
+            pass
+
+    # For each line, compute adjusted unit price and update corresponding batch(es)
+    for l in lines:
+        lid = l.get('id')
+        cat = l.get('category')
+        sub = l.get('subcategory')
+        price = float_or_none(l.get('ordered_price')) or 0.0
+        qty = float_or_none(l.get('quantity')) or 0.0
+        adjusted_price = price
+        if include_flag and total_order_value and total_expenses:
+            try:
+                share = (price * qty) / total_order_value
+                extra_per_unit = (float(total_expenses) * share) / float(qty)
+                adjusted_price = float(price) + float(extra_per_unit)
+            except Exception:
+                adjusted_price = price
+        # Compute base amounts using stored currency and optional fx
+        unit_cost_ccy = adjusted_price
+        # Recompute fx and base conversion
+        base_ccy = get_base_currency()
+        unit_cost_base = unit_cost_ccy
+        try:
+            if (imp_currency or '').upper() != (base_ccy or '').upper() and imp_date:
+                conv = convert_amount(imp_date, unit_cost_ccy, imp_currency, base_ccy)
+                if conv is not None:
+                    unit_cost_base = float(conv)
+        except Exception:
+            pass
+        # Update import_batches rows linked to this import_line_id (or any batch for this import and matching category/subcategory)
+        try:
+            # Prefer direct link via import_line_id
+            cur.execute('SELECT id FROM import_batches WHERE import_line_id=? AND import_id=?', (lid, import_id))
+            bids = [r['id'] for r in cur.fetchall()]
+            if not bids:
+                # fallback: update batches matching category/subcategory
+                cur.execute('SELECT id FROM import_batches WHERE import_id=? AND category=? AND subcategory=?', (import_id, cat, sub))
+                bids = [r['id'] for r in cur.fetchall()]
+            for bid in bids:
+                cur.execute('UPDATE import_batches SET unit_cost=?, unit_cost_base=? WHERE id=?', (unit_cost_ccy, unit_cost_base, bid))
+        except Exception:
+            pass
+    conn.commit()
+    conn.close()
 
 
 def delete_import(import_id):
