@@ -44,6 +44,50 @@ def open_imports_window(root):
     subcategory_entry = tk.Entry(window, width=40)
     subcategory_entry.pack(pady=5)
 
+    # --- Multi-line support: a small list of lines for this import/order ---
+    ttk.Label(window, text="Order lines (optional, add multiple category/subcategory lines):").pack(pady=(8,4))
+    lines_frame = ttk.Frame(window)
+    lines_frame.pack(fill='x', padx=8)
+    lines_tree = ttk.Treeview(lines_frame, columns=('category','subcategory','qty','price'), show='headings', height=4)
+    for c in ('category','subcategory','qty','price'):
+        lines_tree.heading(c, text=c.title())
+        lines_tree.column(c, width=100)
+    lines_tree.pack(side='left', fill='x', expand=True)
+    lines_scroll = ttk.Scrollbar(lines_frame, orient='vertical', command=lines_tree.yview)
+    lines_tree.configure(yscrollcommand=lines_scroll.set)
+    lines_scroll.pack(side='right', fill='y')
+
+    line_buttons = ttk.Frame(window)
+    line_buttons.pack(fill='x', padx=8, pady=(4,8))
+
+    def add_line():
+        c = category_entry.get().strip()
+        s = subcategory_entry.get().strip()
+        p = price_entry.get().strip()
+        q = qty_entry.get().strip()
+        if not c or not p or not q:
+            messagebox.showwarning('Missing line', 'Category, Price and Quantity are required to add a line.')
+            return
+        try:
+            float(p); float(q)
+        except Exception:
+            messagebox.showerror('Invalid', 'Price and Quantity must be numbers.')
+            return
+        lines_tree.insert('', 'end', values=(c, s, q, p))
+
+    def remove_line():
+        sel = lines_tree.selection()
+        if not sel:
+            return
+        for iid in sel:
+            try:
+                lines_tree.delete(iid)
+            except Exception:
+                pass
+
+    themed_button(line_buttons, text='➕ Add Line', variant='primary', command=add_line).pack(side='left', padx=4)
+    themed_button(line_buttons, text='➖ Remove Line', variant='secondary', command=remove_line).pack(side='left', padx=4)
+
     # Product name and id removed per user request
 
     tk.Label(window, text="Ordered Price (per unit):").pack(pady=5)
@@ -431,7 +475,23 @@ def open_imports_window(root):
                 fx_override_val = float(v) if v else None
             except Exception:
                 fx_override_val = None
-            db.add_import(row_date, price, qty, supplier, notes, category, subcategory, cur, fx_override_val)
+            # Collect lines from tree, if any
+            lines = []
+            for iid in lines_tree.get_children():
+                vals = lines_tree.item(iid).get('values', ())
+                try:
+                    ln_cat = vals[0]
+                    ln_sub = vals[1]
+                    ln_qty = float(vals[2])
+                    ln_price = float(vals[3])
+                    lines.append({'category': ln_cat, 'subcategory': ln_sub, 'ordered_price': ln_price, 'quantity': ln_qty})
+                except Exception:
+                    continue
+
+            if lines:
+                db.add_import(row_date, price, qty, supplier, notes, '', '', cur, fx_override_val, lines=lines)
+            else:
+                db.add_import(row_date, price, qty, supplier, notes, category, subcategory, cur, fx_override_val)
         except Exception as e:
             messagebox.showerror("Error", f"Failed to save import: {e}")
             return

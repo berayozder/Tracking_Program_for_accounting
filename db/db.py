@@ -173,6 +173,19 @@ def init_db():
         currency TEXT DEFAULT 'TRY'
     )
     ''')
+    # import_lines: supports multiple category/subcategory lines per import/order
+    cur.execute('''
+    CREATE TABLE IF NOT EXISTS import_lines (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        import_id INTEGER,
+        category TEXT,
+        subcategory TEXT,
+        ordered_price REAL,
+        quantity REAL,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (import_id) REFERENCES imports(id) ON DELETE CASCADE
+    )
+    ''')
     # app settings (key/value)
     cur.execute('''
     CREATE TABLE IF NOT EXISTS settings (
@@ -332,6 +345,12 @@ def init_db():
         if 'deleted' not in bcols:
             try:
                 cur.execute('ALTER TABLE import_batches ADD COLUMN deleted INTEGER DEFAULT 0')
+            except Exception:
+                pass
+        # Support linking batches to specific import_lines (multi-line orders)
+        if 'import_line_id' not in bcols:
+            try:
+                cur.execute('ALTER TABLE import_batches ADD COLUMN import_line_id INTEGER')
             except Exception:
                 pass
     except Exception:
@@ -590,7 +609,11 @@ def float_or_none(v):
         return None
 
 
-def add_import(date, ordered_price, quantity, supplier, notes, category, subcategory, currency: str = 'TRY', fx_override: float = None):
+def add_import(date, ordered_price, quantity, supplier, notes, category, subcategory, currency: str = 'TRY', fx_override: float = None, lines: list = None):
+    """
+    Adds an import/order. Backwards compatible: if `lines` is None, will create a single import and line using category/subcategory.
+    If `lines` is provided, it should be a list of dicts: [{'category':..., 'subcategory':..., 'ordered_price':..., 'quantity':...}, ...]
+    """
     conn = get_conn()
     cur = conn.cursor()
     supplier_name = (supplier or '').strip()
@@ -602,35 +625,64 @@ def add_import(date, ordered_price, quantity, supplier, notes, category, subcate
             supplier_id = None
     enc_notes = encrypt_str(notes)
     cur_ccy = (currency or get_default_import_currency() or 'USD').upper()
+    # Create top-level import order row (summary)
     cur.execute('''INSERT INTO imports (date, ordered_price, quantity, supplier, supplier_id, notes, category, subcategory, currency)
-                VALUES (?,?,?,?,?,?,?,?,?)''', (date, ordered_price, quantity, supplier_name, supplier_id, enc_notes, category, subcategory, cur_ccy))
+                VALUES (?,?,?,?,?,?,?,?,?)''', (date, ordered_price, quantity, supplier_name, supplier_id, enc_notes, category if not lines else '', subcategory if not lines else '', cur_ccy))
     import_id = cur.lastrowid
     conn.commit()
-    unit_cost_in_import_ccy = float(ordered_price or 0.0)
-    base_ccy = get_base_currency()
-    unit_cost_in_base = unit_cost_in_import_ccy
-    fx_to_base = None
-    # If caller provided an override,use it; otherwise try to convert via helper
-    if fx_override is not None:
-        try:
-            fx_to_base = float(fx_override)
-            unit_cost_in_base = float(unit_cost_in_import_ccy) * fx_to_base
-        except Exception:
-            fx_to_base = None
-    else:
-        if (cur_ccy or '').upper() != (base_ccy or '').upper():
-            converted = convert_amount(date, unit_cost_in_import_ccy, cur_ccy, base_ccy)
-            if converted is not None:
-                unit_cost_in_base = float(converted)
-                # compute implied fx rate (base per import currency)
-                try:
-                    fx_to_base = float(unit_cost_in_base) / float(unit_cost_in_import_ccy) if unit_cost_in_import_ccy != 0 else None
-                except Exception:
-                    fx_to_base = None
+
+    # Helper to compute base unit cost and fx
+    def _compute_cost_base(order_date, unit_cost_ccy, ccy, fx_override_val=None):
+        unit_cost_in_import_ccy = float(unit_cost_ccy or 0.0)
+        base_ccy = get_base_currency()
+        unit_cost_in_base = unit_cost_in_import_ccy
+        fx_to_base = None
+        if fx_override_val is not None:
+            try:
+                fx_to_base = float(fx_override_val)
+                unit_cost_in_base = float(unit_cost_in_import_ccy) * fx_to_base
+            except Exception:
+                fx_to_base = None
         else:
-            fx_to_base = 1.0
-    create_import_batch(import_id, date, category, subcategory, quantity, unit_cost_in_import_ccy, supplier, notes, cur_ccy, fx_to_base, unit_cost_in_base, unit_cost_in_base)
-    update_inventory(category, subcategory, quantity, conn)
+            if (ccy or '').upper() != (base_ccy or '').upper():
+                converted = convert_amount(order_date, unit_cost_in_import_ccy, ccy, base_ccy)
+                if converted is not None:
+                    unit_cost_in_base = float(converted)
+                    try:
+                        fx_to_base = float(unit_cost_in_base) / float(unit_cost_in_import_ccy) if unit_cost_in_import_ccy != 0 else None
+                    except Exception:
+                        fx_to_base = None
+            else:
+                fx_to_base = 1.0
+        return unit_cost_in_import_ccy, unit_cost_in_base, fx_to_base
+
+    # If lines provided, create import_lines and batches for each line
+    if lines and isinstance(lines, list) and len(lines) > 0:
+        for ln in lines:
+            ln_cat = ln.get('category')
+            ln_sub = ln.get('subcategory')
+            ln_price = float_or_none(ln.get('ordered_price'))
+            ln_qty = float_or_none(ln.get('quantity'))
+            if ln_price is None or ln_qty is None or not ln_cat:
+                # skip invalid lines
+                continue
+            cur.execute('''INSERT INTO import_lines (import_id, category, subcategory, ordered_price, quantity) VALUES (?,?,?,?,?)''',
+                        (import_id, ln_cat, ln_sub or '', ln_price, ln_qty))
+            import_line_id = cur.lastrowid
+            conn.commit()
+            unit_cost_ccy, unit_cost_base, fx_to_base = _compute_cost_base(date, ln_price, cur_ccy, fx_override)
+            create_import_batch(import_id, date, ln_cat, ln_sub, ln_qty, unit_cost_ccy, supplier, notes, cur_ccy, fx_to_base, unit_cost_base, unit_cost_base, import_line_id=import_line_id)
+            update_inventory(ln_cat, ln_sub, ln_qty, conn)
+    else:
+        # Backward-compatible single-line import
+        unit_cost_ccy, unit_cost_base, fx_to_base = _compute_cost_base(date, ordered_price, cur_ccy, fx_override)
+        # create a line for legacy single entry
+        cur.execute('''INSERT INTO import_lines (import_id, category, subcategory, ordered_price, quantity) VALUES (?,?,?,?,?)''',
+                    (import_id, category, subcategory or '', ordered_price, quantity))
+        import_line_id = cur.lastrowid
+        conn.commit()
+        create_import_batch(import_id, date, category, subcategory, quantity, unit_cost_ccy, supplier, notes, cur_ccy, fx_to_base, unit_cost_base, unit_cost_base, import_line_id=import_line_id)
+        update_inventory(category, subcategory, quantity, conn)
     conn.close()
     write_audit('add', 'import', str(import_id), f"qty={quantity}; price={ordered_price}")
 
@@ -644,6 +696,31 @@ def get_imports(limit=500):
     for r in rows:
         r['notes'] = decrypt_str(r.get('notes'))
     return rows
+
+
+def get_imports_with_lines(limit=500):
+    """Return a list of imports, each with a 'lines' key containing an array of lines."""
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute('SELECT id, date, ordered_price, quantity, supplier, notes, category, subcategory, currency, deleted FROM imports ORDER BY id DESC LIMIT ?', (limit,))
+    imports = [dict(r) for r in cur.fetchall()]
+    out = []
+    for imp in imports:
+        imp_id = imp.get('id')
+        cur.execute('SELECT id, category, subcategory, ordered_price, quantity FROM import_lines WHERE import_id=?', (imp_id,))
+        lines = [dict(l) for l in cur.fetchall()]
+        for l in lines:
+            # ensure numeric types
+            try:
+                l['ordered_price'] = float(l.get('ordered_price') or 0)
+                l['quantity'] = float(l.get('quantity') or 0)
+            except Exception:
+                pass
+        imp['lines'] = lines
+        imp['notes'] = decrypt_str(imp.get('notes'))
+        out.append(imp)
+    conn.close()
+    return out
 
 
 def edit_import(import_id, date, ordered_price, quantity, supplier, notes, category, subcategory, currency: str = None, fx_override: float = None):
@@ -1063,14 +1140,14 @@ def delete_database_file():
     return False
 
 
-def create_import_batch(import_id, date, category, subcategory, quantity, unit_cost, supplier, notes="", currency: str = 'TRY', fx_to_base: float = None, unit_cost_base: float = None, unit_cost_orig: float = None):
+def create_import_batch(import_id, date, category, subcategory, quantity, unit_cost, supplier, notes="", currency: str = 'TRY', fx_to_base: float = None, unit_cost_base: float = None, unit_cost_orig: float = None, import_line_id: int = None):
     conn = get_conn()
     cur = conn.cursor()
     cur.execute('''
         INSERT INTO import_batches (import_id, batch_date, category, subcategory, 
-                                   original_quantity, remaining_quantity, unit_cost, unit_cost_base, supplier, batch_notes, currency, fx_to_base, unit_cost_orig)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ''', (import_id, date, category or '', subcategory or '', quantity, quantity, unit_cost, unit_cost_base, supplier or '', notes or '', currency or 'TRY', (float(fx_to_base) if fx_to_base is not None else None), unit_cost_orig))
+                                   original_quantity, remaining_quantity, unit_cost, unit_cost_base, supplier, batch_notes, currency, fx_to_base, unit_cost_orig, import_line_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ''', (import_id, date, category or '', subcategory or '', quantity, quantity, unit_cost, unit_cost_base, supplier or '', notes or '', currency or 'TRY', (float(fx_to_base) if fx_to_base is not None else None), unit_cost_orig, import_line_id))
     batch_id = cur.lastrowid
     conn.commit()
     conn.close()
