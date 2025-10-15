@@ -31,9 +31,15 @@ def open_settings_window(root):
 
     # Base currency
     ttk.Label(form, text='Base currency:').grid(row=0, column=0, sticky='w', padx=(0, 8), pady=6)
+    # Determine whether base_currency was explicitly set before; if so, make it immutable here
+    existing_base = db.get_setting('base_currency', None)
     base_var = tk.StringVar(value=(db.get_base_currency() or 'USD').upper())
-    base_combo = ttk.Combobox(form, textvariable=base_var, values=currencies, state='readonly', width=10)
+    base_state = 'readonly' if existing_base is None else 'disabled'
+    base_combo = ttk.Combobox(form, textvariable=base_var, values=currencies, state=base_state, width=10)
     base_combo.grid(row=0, column=1, sticky='w')
+    if existing_base is not None:
+        # Inform the user that base currency is immutable for historical consistency
+        ttk.Label(form, text='(Base currency locked after initial setup)', foreground='#a00').grid(row=0, column=2, sticky='w', padx=(8,0))
 
     # Default import currency
     ttk.Label(form, text='Default import currency:').grid(row=1, column=0, sticky='w', padx=(0, 8), pady=6)
@@ -65,7 +71,10 @@ def open_settings_window(root):
             b = (base_var.get() or 'USD').upper()
             di = (def_imp_var.get() or 'USD').upper()
             ds = (def_sale_var.get() or 'TRY').upper()
-            db.set_setting('base_currency', b)
+            # Only set base_currency if it was not previously set; we intentionally prevent
+            # changing the stored base currency after initial setup to preserve historical data.
+            if existing_base is None:
+                db.set_setting('base_currency', b)
             db.set_setting('default_import_currency', di)
             db.set_setting('default_sale_currency', ds)
             db.set_setting('default_expense_currency', (def_exp_var.get() or b).upper())

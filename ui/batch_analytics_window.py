@@ -273,10 +273,10 @@ def open_batch_analytics_window(root):
                     f"{original_qty:.1f}",
                     f"{batch['remaining_quantity']:.1f}",
                     f"{used_percent:.1f}%",
-                    f"${batch['unit_cost']:.2f}",
-                    f"${batch['total_cost_allocated']:.2f}",
-                    f"${batch['total_revenue']:.2f}",
-                    f"${batch['total_profit']:.2f}"
+                    f"${float(batch.get('unit_cost') or 0):.2f}",
+                    f"${float(batch.get('total_cost_allocated') or 0):.2f}",
+                    f"${float(batch.get('total_revenue') or 0):.2f}",
+                    f"${float(batch.get('total_profit') or 0):.2f}"
                 ]
                 
                 item_id = batch_tree.insert('', 'end', values=values)
@@ -309,9 +309,9 @@ def open_batch_analytics_window(root):
                     sale['category'],
                     sale['subcategory'],
                     f"{sale['total_quantity']:.0f}",
-                    f"${sale['total_cost']:.2f}",
-                    f"${sale['total_revenue']:.2f}",
-                    f"${sale['total_profit']:.2f}",
+                    f"${float(sale.get('total_cost') or 0):.2f}",
+                    f"${float(sale.get('total_revenue') or 0):.2f}",
+                    f"${float(sale.get('total_profit') or 0):.2f}",
                     f"{margin_pct:.1f}%",
                     sale['batches_used']
                 ]
@@ -342,25 +342,25 @@ def open_batch_analytics_window(root):
             return
         
         for alloc in allocations:
-            total_profit = alloc['quantity_from_batch'] * alloc['profit_per_unit']
-            
+            total_profit = float(alloc.get('quantity_from_batch') or 0) * float(alloc.get('profit_per_unit') or 0)
+
             values = [
                 alloc['product_id'],
                 alloc['sale_date'],
                 alloc['batch_id'] or 'SHORTAGE',
                 alloc.get('batch_date', 'N/A'),
                 alloc.get('supplier', 'N/A'),
-                f"{alloc['quantity_from_batch']:.1f}",
-                f"${alloc['unit_cost']:.2f}",
-                f"${alloc['unit_sale_price']:.2f}",
-                f"${alloc['profit_per_unit']:.2f}",
-                f"${total_profit:.2f}"
+                f"{float(alloc.get('quantity_from_batch') or 0):.1f}",
+                f"${float(alloc.get('unit_cost') or 0):.2f}",
+                f"${float(alloc.get('unit_sale_price') or 0):.2f}",
+                f"${float(alloc.get('profit_per_unit') or 0):.2f}",
+                f"${float(total_profit or 0):.2f}"
             ]
             
             item_id = detail_tree.insert('', 'end', values=values)
             
             # Color code shortages
-            if alloc['batch_id'] is None:
+            if alloc.get('batch_id') is None:
                 stripe_treeview(detail_tree, item_id, 'danger')
     
     def populate_customer_tree():
@@ -496,4 +496,10 @@ def open_batch_analytics_window(root):
                command=win.destroy).pack(side='right')
     
     # Load initial data
+    # Refresh when a return is recorded elsewhere (view_sales_window emits <<ReturnRecorded>>)
+    try:
+        win.bind('<<ReturnRecorded>>', lambda e: refresh_all_data())
+    except Exception:
+        pass
+
     refresh_all_data()

@@ -61,7 +61,35 @@ def open_imports_window(root):
     cur_cb = ttk.Combobox(window, values=['USD','TRY','EUR','GBP'], textvariable=currency_var, state='readonly', width=10)
     cur_cb.pack(pady=(0,6))
 
-    # No explicit FX entry required; conversion to base currency happens internally using frankfurter
+    # Suggested FX (fetched) + manual override
+    ttk.Label(window, text="Suggested FX (to base currency):").pack(pady=(6,2))
+    suggested_fx_var = tk.StringVar(value='')
+    suggested_fx_label = ttk.Label(window, textvariable=suggested_fx_var)
+    suggested_fx_label.pack()
+
+    ttk.Label(window, text="Override FX (leave empty to accept suggested):").pack(pady=(6,2))
+    fx_entry = tk.Entry(window, width=20)
+    fx_entry.pack(pady=(0,6))
+
+    def fetch_and_show_fx(event=None):
+        d = date_entry.get().strip()
+        c = (currency_var.get() or '').strip().upper()
+        try:
+            if not d or not c:
+                suggested_fx_var.set('')
+                return
+            r = db.get_rate_to_base(d, c)
+            if r is None:
+                suggested_fx_var.set('n/a')
+            else:
+                suggested_fx_var.set(f"1 {c} = {r:.6f} {db.get_base_currency()}")
+        except Exception:
+            suggested_fx_var.set('n/a')
+
+    # Fetch FX initially and when date/currency change
+    fetch_and_show_fx()
+    date_entry.bind('<FocusOut>', fetch_and_show_fx)
+    cur_cb.bind('<<ComboboxSelected>>', fetch_and_show_fx)
 
     tk.Label(window, text="Quantity: ").pack(pady=5)
     qty_entry = tk.Entry(window, width=20)
@@ -396,8 +424,14 @@ def open_imports_window(root):
 
         # insert into DB (db.add_import will also update inventory and link/create supplier if provided)
         try:
-            # Store selected currency; conversion to base currency occurs in db layer
-            db.add_import(row_date, price, qty, supplier, notes, category, subcategory, cur)
+            # read optional FX override
+            fx_override_val = None
+            try:
+                v = fx_entry.get().strip()
+                fx_override_val = float(v) if v else None
+            except Exception:
+                fx_override_val = None
+            db.add_import(row_date, price, qty, supplier, notes, category, subcategory, cur, fx_override_val)
         except Exception as e:
             messagebox.showerror("Error", f"Failed to save import: {e}")
             return

@@ -309,6 +309,9 @@ def stripe_treeview(tree: ttk.Treeview, *args):
         tree.tag_configure('danger', background='#f8d7da', foreground='#721c24')
         tree.tag_configure('info', background='#d1ecf1', foreground='#0c5460')
         tree.tag_configure('returned', background='#fff3cd', foreground='#856404')
+        # Distinct returned states: restocked (persisted back to batches/inventory) vs not restocked
+        tree.tag_configure('returned_restocked', background='#d4edda', foreground='#155724')
+        tree.tag_configure('returned_nonrestocked', background='#fff3cd', foreground='#856404')
         tree.tag_configure('low_stock', background='#f8d7da', foreground='#721c24')
         tree.tag_configure('has_document', background='#d1ecf1', foreground='#0c5460')
     except Exception:
@@ -326,6 +329,10 @@ def stripe_treeview(tree: ttk.Treeview, *args):
     # Default behavior: zebra stripe
     try:
         for i, iid in enumerate(tree.get_children()):
+            # Preserve explicit returned tags (returned_restocked/returned_nonrestocked/returned)
+            existing_tags = tuple(tree.item(iid, 'tags') or ())
+            if any((t or '').startswith('returned') for t in existing_tags):
+                continue
             tag = 'oddrow' if i % 2 else 'evenrow'
             tree.item(iid, tags=(tag,))
     except Exception:

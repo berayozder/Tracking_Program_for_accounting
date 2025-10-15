@@ -157,7 +157,25 @@ def open_view_returns_window(root):
                 except Exception:
                     pass
                 iid = str(rowd.get('id'))
-                tree.insert('', tk.END, iid=iid, values=vals)
+                # Determine tag: if restock_processed is set (1) -> restocked, else if restock requested but not processed -> nonrestocked
+                tag = None
+                try:
+                    rp = int(rowd.get('restock_processed') or 0)
+                except Exception:
+                    rp = 0
+                try:
+                    rflag = int(rowd.get('restock') or 0)
+                except Exception:
+                    rflag = 0
+                if rp == 1:
+                    tag = 'returned_restocked'
+                elif rflag == 1:
+                    tag = 'returned_nonrestocked'
+                # Insert with tag if determined
+                if tag:
+                    tree.insert('', tk.END, iid=iid, values=vals, tags=(tag,))
+                else:
+                    tree.insert('', tk.END, iid=iid, values=vals)
                 last_rows.append(rowd)
                 count += 1
                 try:

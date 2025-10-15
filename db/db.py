@@ -204,23 +204,13 @@ def init_db():
             cur.execute('ALTER TABLE imports ADD COLUMN supplier_id TEXT')
         if 'currency' not in cols:
             cur.execute("ALTER TABLE imports ADD COLUMN currency TEXT DEFAULT 'TRY'")
-        if 'fx_to_try' in cols:
-            cur.execute('''CREATE TABLE IF NOT EXISTS imports_new (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                date TEXT,
-                ordered_price REAL,
-                quantity REAL,
-                supplier TEXT,
-                supplier_id TEXT,
-                notes TEXT,
-                category TEXT,
-                subcategory TEXT,
-                currency TEXT DEFAULT 'TRY'
-            )''')
-            cur.execute('''INSERT INTO imports_new (id, date, ordered_price, quantity, supplier, supplier_id, notes, category, subcategory, currency)
-                           SELECT id, date, ordered_price, quantity, supplier, supplier_id, notes, category, subcategory, currency FROM imports''')
-            cur.execute('DROP TABLE imports')
-            cur.execute('ALTER TABLE imports_new RENAME TO imports')
+        # If older DBs included an fx_to_try column on imports, preserve it into fx_to_base
+        if 'fx_to_try' in cols and 'fx_to_base' not in cols:
+            try:
+                cur.execute('ALTER TABLE imports ADD COLUMN fx_to_base REAL')
+                cur.execute('UPDATE imports SET fx_to_base = fx_to_try WHERE fx_to_try IS NOT NULL')
+            except Exception:
+                pass
     except Exception:
         pass
     # USERS (for login/roles)
@@ -311,10 +301,11 @@ def init_db():
         original_quantity REAL,
         remaining_quantity REAL,
         unit_cost REAL,
+    unit_cost_base REAL,
         supplier TEXT,
         batch_notes TEXT,
         currency TEXT DEFAULT 'TRY',
-        fx_to_try REAL DEFAULT 1.0,
+    fx_to_base REAL DEFAULT 1.0,
         unit_cost_orig REAL,
         created_at TEXT DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (import_id) REFERENCES imports(id) ON DELETE CASCADE
@@ -325,10 +316,12 @@ def init_db():
         bcols = [row['name'] for row in cur.fetchall()]
         if 'currency' not in bcols:
             cur.execute("ALTER TABLE import_batches ADD COLUMN currency TEXT DEFAULT 'TRY'")
-        if 'fx_to_try' not in bcols:
-            cur.execute('ALTER TABLE import_batches ADD COLUMN fx_to_try REAL DEFAULT 1.0')
+        if 'fx_to_base' not in bcols:
+            cur.execute('ALTER TABLE import_batches ADD COLUMN fx_to_base REAL DEFAULT 1.0')
         if 'unit_cost_orig' not in bcols:
             cur.execute('ALTER TABLE import_batches ADD COLUMN unit_cost_orig REAL')
+        if 'unit_cost_base' not in bcols:
+            cur.execute('ALTER TABLE import_batches ADD COLUMN unit_cost_base REAL')
     except Exception:
         pass
     cur.execute('''
@@ -368,11 +361,19 @@ def init_db():
         refund_amount_base REAL,
         restock INTEGER,
         reason TEXT,
-        doc_paths TEXT
+        doc_paths TEXT,
+        restock_processed INTEGER DEFAULT 0
     )
     ''')
     cur.execute('CREATE INDEX IF NOT EXISTS idx_returns_date ON returns(return_date)')
     cur.execute('CREATE INDEX IF NOT EXISTS idx_returns_product ON returns(product_id)')
+    try:
+        cur.execute('PRAGMA table_info(returns)')
+        rcols = [row['name'] for row in cur.fetchall()]
+        if 'restock_processed' not in rcols:
+            cur.execute("ALTER TABLE returns ADD COLUMN restock_processed INTEGER DEFAULT 0")
+    except Exception:
+        pass
     # Triggers for product_codes integrity
     cur.execute('''
     CREATE TRIGGER IF NOT EXISTS trg_product_codes_bi
@@ -561,7 +562,7 @@ def float_or_none(v):
         return None
 
 
-def add_import(date, ordered_price, quantity, supplier, notes, category, subcategory, currency: str = 'TRY'):
+def add_import(date, ordered_price, quantity, supplier, notes, category, subcategory, currency: str = 'TRY', fx_override: float = None):
     conn = get_conn()
     cur = conn.cursor()
     supplier_name = (supplier or '').strip()
@@ -580,10 +581,27 @@ def add_import(date, ordered_price, quantity, supplier, notes, category, subcate
     unit_cost_in_import_ccy = float(ordered_price or 0.0)
     base_ccy = get_base_currency()
     unit_cost_in_base = unit_cost_in_import_ccy
-    if (cur_ccy or '').upper() != (base_ccy or '').upper():
-        converted = convert_amount(date, unit_cost_in_import_ccy, cur_ccy, base_ccy)
-        unit_cost_in_base = converted if converted is not None else unit_cost_in_base
-    create_import_batch(import_id, date, category, subcategory, quantity, unit_cost_in_import_ccy, supplier, notes, cur_ccy, 1.0, unit_cost_in_base)
+    fx_to_base = None
+    # If caller provided an override,use it; otherwise try to convert via helper
+    if fx_override is not None:
+        try:
+            fx_to_base = float(fx_override)
+            unit_cost_in_base = float(unit_cost_in_import_ccy) * fx_to_base
+        except Exception:
+            fx_to_base = None
+    else:
+        if (cur_ccy or '').upper() != (base_ccy or '').upper():
+            converted = convert_amount(date, unit_cost_in_import_ccy, cur_ccy, base_ccy)
+            if converted is not None:
+                unit_cost_in_base = float(converted)
+                # compute implied fx rate (base per import currency)
+                try:
+                    fx_to_base = float(unit_cost_in_base) / float(unit_cost_in_import_ccy) if unit_cost_in_import_ccy != 0 else None
+                except Exception:
+                    fx_to_base = None
+        else:
+            fx_to_base = 1.0
+    create_import_batch(import_id, date, category, subcategory, quantity, unit_cost_in_import_ccy, supplier, notes, cur_ccy, fx_to_base, unit_cost_in_base, unit_cost_in_base)
     update_inventory(category, subcategory, quantity, conn)
     conn.close()
     write_audit('add', 'import', str(import_id), f"qty={quantity}; price={ordered_price}")
@@ -600,7 +618,7 @@ def get_imports(limit=500):
     return rows
 
 
-def edit_import(import_id, date, ordered_price, quantity, supplier, notes, category, subcategory, currency: str = None):
+def edit_import(import_id, date, ordered_price, quantity, supplier, notes, category, subcategory, currency: str = None, fx_override: float = None):
     conn = get_conn()
     cur = conn.cursor()
     supplier_name = (supplier or '').strip()
@@ -624,12 +642,28 @@ def edit_import(import_id, date, ordered_price, quantity, supplier, notes, categ
     if (new_currency_u or '') != (base_ccy or '').upper():
         converted = convert_amount(date, unit_cost_in_import_ccy, new_currency_u, base_ccy)
         unit_cost_in_base = converted if converted is not None else unit_cost_in_base
+    # compute fx_to_base similarly to add_import; allow override
+    fx_to_base = None
+    if fx_override is not None:
+        try:
+            fx_to_base = float(fx_override)
+            unit_cost_in_base = float(unit_cost_in_import_ccy) * fx_to_base
+        except Exception:
+            fx_to_base = None
+    else:
+        try:
+            if (new_currency_u or '') == (base_ccy or '').upper():
+                fx_to_base = 1.0
+            else:
+                fx_to_base = float(unit_cost_in_base) / float(unit_cost_in_import_ccy) if unit_cost_in_import_ccy != 0 else None
+        except Exception:
+            fx_to_base = None
     cur.execute('''UPDATE import_batches 
-                   SET batch_date=?, category=?, subcategory=?, unit_cost=?, supplier=?, batch_notes=?, 
+                   SET batch_date=?, category=?, subcategory=?, unit_cost=?, unit_cost_base=?, supplier=?, batch_notes=?, 
                        original_quantity=?, remaining_quantity=remaining_quantity+(?)-(original_quantity),
-                       currency=?, unit_cost_orig=?
+                             currency=?, unit_cost_orig=?, fx_to_base=?
                    WHERE import_id=?''',
-                (date, category, subcategory, unit_cost_in_import_ccy, supplier, notes, quantity, quantity, new_currency, unit_cost_in_base, import_id))
+                         (date, category, subcategory, unit_cost_in_import_ccy, unit_cost_in_base, supplier, notes, quantity, quantity, new_currency, unit_cost_in_base, fx_to_base, import_id))
     conn.commit()
     rebuild_inventory_from_imports(conn)
     conn.close()
@@ -950,14 +984,14 @@ def delete_database_file():
     return False
 
 
-def create_import_batch(import_id, date, category, subcategory, quantity, unit_cost, supplier, notes="", currency: str = 'TRY', fx_to_try: float = 1.0, unit_cost_orig: float = None):
+def create_import_batch(import_id, date, category, subcategory, quantity, unit_cost, supplier, notes="", currency: str = 'TRY', fx_to_base: float = None, unit_cost_base: float = None, unit_cost_orig: float = None):
     conn = get_conn()
     cur = conn.cursor()
     cur.execute('''
         INSERT INTO import_batches (import_id, batch_date, category, subcategory, 
-                                   original_quantity, remaining_quantity, unit_cost, supplier, batch_notes, currency, fx_to_try, unit_cost_orig)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ''', (import_id, date, category or '', subcategory or '', quantity, quantity, unit_cost, supplier or '', notes or '', currency or 'TRY', float(fx_to_try or 1.0), unit_cost_orig))
+                                   original_quantity, remaining_quantity, unit_cost, unit_cost_base, supplier, batch_notes, currency, fx_to_base, unit_cost_orig)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ''', (import_id, date, category or '', subcategory or '', quantity, quantity, unit_cost, unit_cost_base, supplier or '', notes or '', currency or 'TRY', (float(fx_to_base) if fx_to_base is not None else None), unit_cost_orig))
     batch_id = cur.lastrowid
     conn.commit()
     conn.close()
@@ -970,7 +1004,7 @@ def get_available_batches(category, subcategory=None, order_by_date=True):
     if subcategory:
         query = '''
             SELECT id, batch_date, category, subcategory, original_quantity, remaining_quantity, 
-                   unit_cost, unit_cost_orig, currency, fx_to_try, supplier, batch_notes, import_id
+                   unit_cost, unit_cost_base, unit_cost_orig, currency, fx_to_base, supplier, batch_notes, import_id
             FROM import_batches 
             WHERE category = ? AND subcategory = ? AND remaining_quantity > 0
         '''
@@ -978,7 +1012,7 @@ def get_available_batches(category, subcategory=None, order_by_date=True):
     else:
         query = '''
             SELECT id, batch_date, category, subcategory, original_quantity, remaining_quantity, 
-                   unit_cost, unit_cost_orig, currency, fx_to_try, supplier, batch_notes, import_id
+                   unit_cost, unit_cost_base, unit_cost_orig, currency, fx_to_base, supplier, batch_notes, import_id
             FROM import_batches 
             WHERE category = ? AND remaining_quantity > 0
         '''
@@ -1060,7 +1094,7 @@ def backfill_allocation_unit_costs():
         cur.execute('''
             UPDATE sale_batch_allocations
             SET unit_cost = (
-                SELECT COALESCE(ib.unit_cost_orig, ib.unit_cost, 0)
+                SELECT COALESCE(ib.unit_cost_base, ib.unit_cost_orig, ib.unit_cost, 0)
                 FROM import_batches ib
                 WHERE ib.id = sale_batch_allocations.batch_id
             )
@@ -1087,9 +1121,9 @@ def get_sale_batch_info(product_id):
             sba.subcategory,
             sba.batch_id,
             sba.quantity_from_batch,
-            COALESCE(NULLIF(sba.unit_cost, 0), ib.unit_cost_orig, ib.unit_cost, 0) AS unit_cost,
+                COALESCE(NULLIF(sba.unit_cost, 0), ib.unit_cost_base, ib.unit_cost_orig, ib.unit_cost, 0) AS unit_cost,
             sba.unit_sale_price,
-            (COALESCE(sba.unit_sale_price,0) - COALESCE(NULLIF(sba.unit_cost, 0), ib.unit_cost_orig, ib.unit_cost, 0)) AS profit_per_unit,
+            (COALESCE(sba.unit_sale_price,0) - COALESCE(NULLIF(sba.unit_cost, 0), ib.unit_cost_base, ib.unit_cost_orig, ib.unit_cost, 0)) AS profit_per_unit,
             ib.batch_date,
             ib.supplier,
             ib.batch_notes
@@ -1115,9 +1149,9 @@ def get_batch_utilization_report():
             ib.supplier,
             ib.original_quantity,
             ib.remaining_quantity,
-            ib.unit_cost,
+                COALESCE(ib.unit_cost_base, ib.unit_cost, 0) AS unit_cost,
             ib.original_quantity - ib.remaining_quantity as allocated_quantity,
-            ROUND((ib.original_quantity - ib.remaining_quantity) * ib.unit_cost, 2) as total_cost_allocated,
+            ROUND((ib.original_quantity - ib.remaining_quantity) * COALESCE(ib.unit_cost_base, ib.unit_cost), 2) as total_cost_allocated,
             COALESCE(SUM(sba.quantity_from_batch * sba.unit_sale_price), 0) as total_revenue,
             COALESCE(SUM(sba.quantity_from_batch * sba.profit_per_unit), 0) as total_profit
         FROM import_batches ib
@@ -1127,6 +1161,107 @@ def get_batch_utilization_report():
     ''')
     rows = [dict(r) for r in cur.fetchall()]
     conn.close()
+    # Apply returns adjustments per batch: if a returned product maps to a batch allocation,
+    # subtract refund_amount_base from that batch's revenue and profit. If restock is true,
+    # increment remaining_quantity and reduce allocated_quantity accordingly (reporting only).
+    try:
+        conn2 = get_conn()
+        cur2 = conn2.cursor()
+        # Fetch returns with refund_amount_base and product_id/restock
+        cur2.execute("SELECT id, product_id, refund_amount_base, restock, sale_date FROM returns")
+        returns = cur2.fetchall()
+        # Build a map of batch adjustments keyed by batch_id
+        batch_adj = {}
+        for ret in returns:
+            try:
+                rid = ret['id'] if isinstance(ret, dict) else ret[0]
+                pid = ret['product_id'] if isinstance(ret, dict) else ret[1]
+                refund_base = float(ret['refund_amount_base'] or 0.0) if isinstance(ret, dict) else float(ret[2] or 0.0)
+                restock = int(ret['restock'] if isinstance(ret, dict) else ret[3] or 0)
+            except Exception:
+                # row might be sqlite3.Row
+                try:
+                    pid = ret['product_id']
+                    refund_base = float(ret['refund_amount_base'] or 0.0)
+                    restock = int(ret['restock'] or 0)
+                except Exception:
+                    continue
+            if not pid:
+                continue
+            # Prefer allocations matching the original sale_date when available (credit the exact batch)
+            sale_date = None
+            try:
+                sale_date = ret['sale_date'] if isinstance(ret, dict) else ret[4]
+            except Exception:
+                sale_date = None
+            if sale_date:
+                cur2.execute('''
+                    SELECT batch_id, quantity_from_batch, unit_cost, unit_sale_price
+                    FROM sale_batch_allocations
+                    WHERE product_id = ? AND sale_date = ?
+                    ORDER BY id DESC
+                ''', (pid, sale_date))
+            else:
+                # Fallback: allocations for this product ordered by id DESC (latest allocations first)
+                cur2.execute('''
+                    SELECT batch_id, quantity_from_batch, unit_cost, unit_sale_price
+                    FROM sale_batch_allocations
+                    WHERE product_id = ? ORDER BY id DESC
+                ''', (pid,))
+            allocs = cur2.fetchall()
+            remaining_refund = refund_base
+            remaining_units = 1.0  # assume 1 unit returned per return row; extend if returns store quantity
+            for a in allocs:
+                batch_id = a['batch_id'] if isinstance(a, dict) else a[0]
+                qty_from_batch = float(a['quantity_from_batch'] if isinstance(a, dict) else a[1] or 0.0)
+                unit_cost = float(a['unit_cost'] if isinstance(a, dict) else a[2] or 0.0)
+                unit_sale = float(a['unit_sale_price'] if isinstance(a, dict) else a[3] or 0.0)
+                if batch_id is None:
+                    continue
+                # Attribute one unit (or as much as available) to this batch
+                used_units = min(remaining_units, qty_from_batch)
+                if used_units <= 0:
+                    continue
+                # Prepare batch adjustment entry
+                b = batch_adj.setdefault(batch_id, {'rev_delta': 0.0, 'profit_delta': 0.0, 'remaining_delta': 0.0, 'allocated_delta': 0.0})
+                # Subtract proportional revenue (use per-unit sale price)
+                rev_delta = used_units * unit_sale * -1.0
+                b['rev_delta'] += rev_delta
+                # If restock, add units back to remaining_quantity and remove from allocated
+                if restock:
+                    # For restocked returns we assume import_batches has already been updated when the return
+                    # was recorded (insert_return persists the restock). Do not apply remaining/allocated
+                    # deltas again here to avoid double-counting. We still subtract revenue via rev_delta.
+                    break
+        conn2.close()
+        # Apply adjustments to rows list — recompute cost & profit from adjusted revenue and allocated quantities
+        for i, row in enumerate(rows):
+            bid = row.get('id')
+            adj = batch_adj.get(bid)
+            if not adj:
+                continue
+            try:
+                # adjust revenue
+                new_revenue = float(row.get('total_revenue', 0.0)) + float(adj.get('rev_delta', 0.0))
+                # adjust quantities
+                new_allocated = float(row.get('allocated_quantity', 0.0)) + float(adj.get('allocated_delta', 0.0))
+                new_remaining = float(row.get('remaining_quantity', 0.0)) + float(adj.get('remaining_delta', 0.0))
+                # recompute cost allocated from adjusted allocated quantity
+                unit_cost = float(row.get('unit_cost', 0.0))
+                new_total_cost_allocated = round(max(0.0, new_allocated) * unit_cost, 2)
+                # derive profit as revenue - cost
+                new_total_profit = round(float(new_revenue) - float(new_total_cost_allocated), 6)
+
+                row['total_revenue'] = new_revenue
+                row['allocated_quantity'] = new_allocated
+                row['remaining_quantity'] = new_remaining
+                row['total_cost_allocated'] = new_total_cost_allocated
+                row['total_profit'] = new_total_profit
+            except Exception:
+                pass
+    except Exception:
+        pass
+
     return rows
 
 
@@ -1248,12 +1383,12 @@ def get_profit_analysis_by_sale(include_expenses: bool = False):
                 sba.category,
                 sba.subcategory,
                 SUM(sba.quantity_from_batch) as total_quantity,
-                ROUND(SUM(sba.quantity_from_batch * COALESCE(NULLIF(sba.unit_cost,0), ib.unit_cost_orig, ib.unit_cost, 0)), 2) as total_cost,
+                ROUND(SUM(sba.quantity_from_batch * COALESCE(NULLIF(sba.unit_cost,0), ib.unit_cost_base, ib.unit_cost_orig, ib.unit_cost, 0)), 2) as total_cost,
                 ROUND(SUM(sba.quantity_from_batch * sba.unit_sale_price), 2) as total_revenue,
-                ROUND(SUM(sba.quantity_from_batch * (sba.unit_sale_price - COALESCE(NULLIF(sba.unit_cost,0), ib.unit_cost_orig, ib.unit_cost, 0))), 2) as total_profit,
+                ROUND(SUM(sba.quantity_from_batch * (sba.unit_sale_price - COALESCE(NULLIF(sba.unit_cost,0), ib.unit_cost_base, ib.unit_cost_orig, ib.unit_cost, 0))), 2) as total_profit,
                 ROUND(
-                    SUM(sba.quantity_from_batch * (sba.unit_sale_price - COALESCE(NULLIF(sba.unit_cost,0), ib.unit_cost_orig, ib.unit_cost, 0))) 
-                    / NULLIF(SUM(sba.quantity_from_batch * COALESCE(NULLIF(sba.unit_cost,0), ib.unit_cost_orig, ib.unit_cost, 0)), 0) * 100
+                    SUM(sba.quantity_from_batch * (sba.unit_sale_price - COALESCE(NULLIF(sba.unit_cost,0), ib.unit_cost_base, ib.unit_cost_orig, ib.unit_cost, 0))) 
+                    / NULLIF(SUM(sba.quantity_from_batch * COALESCE(NULLIF(sba.unit_cost,0), ib.unit_cost_base, ib.unit_cost_orig, ib.unit_cost, 0)), 0) * 100
                 , 2) as profit_margin_percent,
                 COUNT(DISTINCT sba.batch_id) as batches_used
             FROM sale_batch_allocations sba
@@ -1261,10 +1396,13 @@ def get_profit_analysis_by_sale(include_expenses: bool = False):
             GROUP BY sba.product_id
             ORDER BY sba.sale_date DESC
         ''')
-        rows = [dict(r) for r in cur.fetchall()]
-        conn.close()
-        return rows
-    cur.execute('''
+    rows = [dict(r) for r in cur.fetchall()]
+    conn.close()
+
+    # Fetch detailed allocations using a fresh connection (avoid closed cursor)
+    conn_a = get_conn()
+    cur_a = conn_a.cursor()
+    cur_a.execute('''
         SELECT 
             sba.product_id,
             sba.sale_date,
@@ -1272,14 +1410,14 @@ def get_profit_analysis_by_sale(include_expenses: bool = False):
             sba.subcategory,
             sba.quantity_from_batch,
             sba.unit_sale_price,
-            COALESCE(NULLIF(sba.unit_cost,0), ib.unit_cost_orig, ib.unit_cost, 0) AS unit_cost,
+            COALESCE(NULLIF(sba.unit_cost,0), ib.unit_cost_base, ib.unit_cost_orig, ib.unit_cost, 0) AS unit_cost,
             ib.import_id
         FROM sale_batch_allocations sba
         LEFT JOIN import_batches ib ON sba.batch_id = ib.id
         ORDER BY sba.sale_date DESC
     ''')
-    allocs = [dict(r) for r in cur.fetchall()]
-    conn.close()
+    allocs = [dict(r) for r in cur_a.fetchall()]
+    conn_a.close()
     per_imp = _build_import_expense_per_unit_map()
     agg: Dict[str, Dict[str, float]] = {}
     sale_date: Dict[str, str] = {}
@@ -1308,6 +1446,8 @@ def get_profit_analysis_by_sale(include_expenses: bool = False):
         rev = float(d['rev'])
         profit = rev - cost
         margin = (profit / cost * 100.0) if cost > 0 else 0.0
+        per_unit_cost = (cost / d['qty']) if float(d['qty']) > 0 else 0.0
+        per_unit_sale = (rev / d['qty']) if float(d['qty']) > 0 else 0.0
         rows.append({
             'product_id': pid,
             'sale_date': sale_date.get(pid),
@@ -1317,6 +1457,8 @@ def get_profit_analysis_by_sale(include_expenses: bool = False):
             'total_cost': round(cost, 2),
             'total_revenue': round(rev, 2),
             'total_profit': round(profit, 2),
+            'per_unit_cost': round(per_unit_cost, 6),
+            'per_unit_sale': round(per_unit_sale, 6),
             'profit_margin_percent': round(margin, 2),
             'batches_used': None,
         })
@@ -1331,6 +1473,154 @@ def get_profit_analysis_by_sale(include_expenses: bool = False):
         conn2.close()
     except Exception:
         pass
+    # Apply returns adjustments so per-sale profit analysis reflects refunds/restocks
+    try:
+        conn3 = get_conn()
+        cur3 = conn3.cursor()
+        cur3.execute("SELECT product_id, refund_amount, refund_currency, return_date, COALESCE(refund_amount_base,0) as refund_amount_base, COALESCE(restock,0) as restock FROM returns")
+        returns = cur3.fetchall()
+        conn3.close()
+        if returns:
+            # Build quick index for rows by product_id
+            idx = {r['product_id']: r for r in rows}
+            for rr in returns:
+                pid = rr['product_id']
+                if not pid:
+                    continue
+                # Prefer refund amount in sale currency; convert if necessary
+                try:
+                    raw_refund = float(rr['refund_amount'] or 0.0)
+                except Exception:
+                    raw_refund = 0.0
+                refund_ccy = (rr.get('refund_currency') or get_default_sale_currency()) if isinstance(rr, dict) else (rr[2] or get_default_sale_currency())
+                return_date = rr.get('return_date') if isinstance(rr, dict) else (rr[3] if len(rr) > 3 else '')
+                # Try convert refund amount into sale currency
+                try:
+                    sale_ccy = get_default_sale_currency()
+                    converted = convert_amount(return_date or '', raw_refund, (refund_ccy or '').upper(), (sale_ccy or '').upper())
+                    refund_amt = float(converted) if converted is not None else float(rr['refund_amount_base'] or 0.0)
+                except Exception:
+                    try:
+                        refund_amt = float(rr['refund_amount_base'] or 0.0)
+                    except Exception:
+                        refund_amt = 0.0
+                restock_flag = 1 if int(rr['restock'] or 0) else 0
+                target = idx.get(pid)
+                if not target:
+                    # No aggregated sale for this product (maybe legacy CSV sale); skip
+                    continue
+                # Reduce revenue so reports reflect refund
+                target['total_revenue'] = round(float(target.get('total_revenue', 0.0)) - float(refund_amt or 0.0), 2)
+                # Decrease quantity by 1 (a returned unit)
+                try:
+                    orig_qty = float(target.get('total_quantity', 0.0))
+                    target['total_quantity'] = orig_qty - 1.0
+                except Exception:
+                    target['total_quantity'] = 0.0
+                if target['total_quantity'] < 0:
+                    target['total_quantity'] = 0.0
+
+                # Apply profit adjustment rules requested:
+                # - Non-restocked: profit(total) = profit(total) - saleprice (refund amount in base)
+                # - Restocked: profit(total) = profit(total) - profit(product) (per-unit profit)
+                try:
+                    current_profit = float(target.get('total_profit', 0.0))
+                except Exception:
+                    current_profit = 0.0
+                if restock_flag:
+                    # For restocked returns, we want the net profit to decrease by one unit's profit
+                    # (per_unit_sale - per_unit_cost). To guarantee this, adjust revenue by
+                    # per_unit_sale and cost by per_unit_cost. Prefer precomputed per_unit fields
+                    # stored in `target`; otherwise compute from allocations.
+                    try:
+                        per_unit_cost = float(target.get('per_unit_cost', 0.0))
+                        per_unit_sale = float(target.get('per_unit_sale', 0.0))
+                    except Exception:
+                        per_unit_cost = 0.0
+                        per_unit_sale = 0.0
+
+                    if (not per_unit_cost or not per_unit_sale):
+                        # Fallback: derive per-unit sale and cost from allocations
+                        try:
+                            conn_p = get_conn()
+                            cur_p = conn_p.cursor()
+                            cur_p.execute('''
+                                SELECT SUM(COALESCE(sba.quantity_from_batch,0) * COALESCE(sba.unit_sale_price,0)) AS tot_rev,
+                                       SUM(COALESCE(sba.quantity_from_batch,0)) AS tot_qty,
+                                       SUM(COALESCE(NULLIF(sba.unit_cost,0), ib.unit_cost_base, ib.unit_cost_orig, ib.unit_cost, 0) * COALESCE(sba.quantity_from_batch,0)) AS tot_cost
+                                FROM sale_batch_allocations sba
+                                LEFT JOIN import_batches ib ON sba.batch_id = ib.id
+                                WHERE sba.product_id = ?
+                            ''', (pid,))
+                            rowp = cur_p.fetchone()
+                            conn_p.close()
+                            tot_rev = float(rowp['tot_rev'] if rowp and rowp['tot_rev'] is not None else 0.0)
+                            tot_qty = float(rowp['tot_qty'] if rowp and rowp['tot_qty'] is not None else 0.0)
+                            tot_cost = float(rowp['tot_cost'] if rowp and rowp['tot_cost'] is not None else 0.0)
+                            if tot_qty > 0:
+                                per_unit_sale = per_unit_sale or (tot_rev / tot_qty)
+                                per_unit_cost = per_unit_cost or (tot_cost / tot_qty)
+                        except Exception:
+                            per_unit_sale = per_unit_sale or 0.0
+                            per_unit_cost = per_unit_cost or 0.0
+
+                    # Ensure revenue reflects per_unit_sale (we previously subtracted refund_amt)
+                    try:
+                        # current total_revenue already had refund_amt subtracted earlier
+                        cur_rev = float(target.get('total_revenue', 0.0))
+                        # compute adjusted revenue as original_rev - per_unit_sale
+                        # so add back the earlier refund_amt and subtract per_unit_sale
+                        adj_rev = cur_rev + float(refund_amt or 0.0) - float(per_unit_sale or 0.0)
+                        target['total_revenue'] = round(max(0.0, adj_rev), 2)
+                    except Exception:
+                        target['total_revenue'] = round(float(target.get('total_revenue', 0.0)), 2)
+
+                    # Reduce total_cost by per-unit cost (item returned to stock)
+                    try:
+                        target['total_cost'] = round(float(target.get('total_cost', 0.0)) - float(per_unit_cost or 0.0), 2)
+                        if target['total_cost'] < 0:
+                            target['total_cost'] = 0.0
+                    except Exception:
+                        target['total_cost'] = 0.0
+
+                    # Recompute profit as revenue - cost; net effect = -per_unit_profit
+                    try:
+                        tr = float(target.get('total_revenue', 0.0))
+                        tc = float(target.get('total_cost', 0.0))
+                        target['total_profit'] = round(tr - tc, 2)
+                        target['profit_margin_percent'] = round((target['total_profit'] / tc * 100.0), 2) if tc > 0 else 0.0
+                    except Exception:
+                        target['total_profit'] = round(float(target.get('total_profit', 0.0)) - (float(per_unit_sale or 0.0) - float(per_unit_cost or 0.0)), 2)
+                else:
+                    # Non-restock: product refunded but not restocked
+                    try:
+                        per_unit_refund = float(refund_amt or 0.0)
+                    except Exception:
+                        per_unit_refund = 0.0
+
+                    # Reduce revenue and profit accordingly
+                    try:
+                        target['total_revenue'] = round(float(target.get('total_revenue', 0.0)) - per_unit_refund, 2)
+                        if target['total_revenue'] < 0:
+                            target['total_revenue'] = 0.0
+                    except Exception:
+                        target['total_revenue'] = 0.0
+
+                    # Recalculate profit (no cost adjustment since item not restocked)
+                    tr = float(target.get('total_revenue', 0.0))
+                    tc = float(target.get('total_cost', 0.0))
+                    target['total_profit'] = round(tr - tc, 2)
+                    target['profit_margin_percent'] = round((target['total_profit'] / tc * 100.0), 2) if tc > 0 else 0.0
+                # Recompute profit margin percent relative to total_cost
+                try:
+                    tc = float(target.get('total_cost', 0.0))
+                    tp = float(target.get('total_profit', 0.0))
+                    target['profit_margin_percent'] = round((tp / tc * 100.0) if tc > 0 else 0.0, 2)
+                except Exception:
+                    target['profit_margin_percent'] = 0.0
+    except Exception:
+        pass
+
     return rows
 
 
@@ -1340,7 +1630,7 @@ def _get_exact_cogs_for_product(product_id: str) -> float:
         cur = conn.cursor()
         cur.execute('''
             SELECT 
-                SUM(COALESCE(NULLIF(sba.unit_cost,0), ib.unit_cost_orig, ib.unit_cost, 0) * COALESCE(sba.quantity_from_batch,0)) AS total_cost
+                SUM(COALESCE(NULLIF(sba.unit_cost,0), ib.unit_cost_base, ib.unit_cost_orig, ib.unit_cost, 0) * COALESCE(sba.quantity_from_batch,0)) AS total_cost
             FROM sale_batch_allocations sba
             LEFT JOIN import_batches ib ON sba.batch_id = ib.id
             WHERE sba.product_id = ?
@@ -1643,18 +1933,18 @@ def get_monthly_sales_profit(year: int):
                 bucket['items_sold'] -= 1.0
                 if restock_flag and pid:
                     try:
-                        conn3 = get_conn()
-                        cur3 = conn3.cursor()
-                        cur3.execute('''
+                        conn2b = get_conn()
+                        cur2b = conn2b.cursor()
+                        cur2b.execute('''
                             SELECT 
                                 SUM(COALESCE(sba.quantity_from_batch,0)) AS tq,
-                                SUM(COALESCE(NULLIF(sba.unit_cost,0), ib.unit_cost_orig, ib.unit_cost, 0) * COALESCE(sba.quantity_from_batch,0)) AS tc
+                                SUM(COALESCE(NULLIF(sba.unit_cost,0), ib.unit_cost_base, ib.unit_cost_orig, ib.unit_cost, 0) * COALESCE(sba.quantity_from_batch,0)) AS tc
                             FROM sale_batch_allocations sba
                             LEFT JOIN import_batches ib ON sba.batch_id = ib.id
                             WHERE sba.product_id = ?
                         ''', (pid,))
-                        rowc = cur3.fetchone()
-                        conn3.close()
+                        rowc = cur2b.fetchone()
+                        conn2b.close()
                         tq = float(rowc['tq'] or 0.0) if rowc else 0.0
                         tc = float(rowc['tc'] or 0.0) if rowc else 0.0
                         per_unit = (tc / tq) if tq > 0 else 0.0
@@ -1663,8 +1953,7 @@ def get_monthly_sales_profit(year: int):
                         pass
         except Exception:
             pass
-    else:
-        # Fallback to CSV (legacy)
+
         try:
             if RETURNS_CSV.exists():
                 import csv as _csv
@@ -1701,7 +1990,7 @@ def get_monthly_sales_profit(year: int):
                                     cur2.execute('''
                                         SELECT 
                                             SUM(COALESCE(sba.quantity_from_batch,0)) AS tq,
-                                            SUM(COALESCE(NULLIF(sba.unit_cost,0), ib.unit_cost_orig, ib.unit_cost, 0) * COALESCE(sba.quantity_from_batch,0)) AS tc
+                                            SUM(COALESCE(NULLIF(sba.unit_cost,0), ib.unit_cost_base, ib.unit_cost_orig, ib.unit_cost, 0) * COALESCE(sba.quantity_from_batch,0)) AS tc
                                         FROM sale_batch_allocations sba
                                         LEFT JOIN import_batches ib ON sba.batch_id = ib.id
                                         WHERE sba.product_id = ?
@@ -1833,7 +2122,7 @@ def get_yearly_sales_profit():
                         cur3.execute('''
                             SELECT 
                                 SUM(COALESCE(sba.quantity_from_batch,0)) AS tq,
-                                SUM(COALESCE(NULLIF(sba.unit_cost,0), ib.unit_cost_orig, ib.unit_cost, 0) * COALESCE(sba.quantity_from_batch,0)) AS tc
+                                SUM(COALESCE(NULLIF(sba.unit_cost,0), ib.unit_cost_base, ib.unit_cost_orig, ib.unit_cost, 0) * COALESCE(sba.quantity_from_batch,0)) AS tc
                             FROM sale_batch_allocations sba
                             LEFT JOIN import_batches ib ON sba.batch_id = ib.id
                             WHERE sba.product_id = ?
@@ -1885,7 +2174,7 @@ def get_yearly_sales_profit():
                                     cur2.execute('''
                                         SELECT 
                                             SUM(COALESCE(sba.quantity_from_batch,0)) AS tq,
-                                            SUM(COALESCE(NULLIF(sba.unit_cost,0), ib.unit_cost_orig, ib.unit_cost, 0) * COALESCE(sba.quantity_from_batch,0)) AS tc
+                                            SUM(COALESCE(NULLIF(sba.unit_cost,0), ib.unit_cost_base, ib.unit_cost_orig, ib.unit_cost, 0) * COALESCE(sba.quantity_from_batch,0)) AS tc
                                         FROM sale_batch_allocations sba
                                         LEFT JOIN import_batches ib ON sba.batch_id = ib.id
                                         WHERE sba.product_id = ?
@@ -1970,7 +2259,7 @@ def get_monthly_return_impact(year: int):
                             cur3.execute('''
                                 SELECT 
                                     SUM(COALESCE(sba.quantity_from_batch,0)) AS tq,
-                                    SUM(COALESCE(NULLIF(sba.unit_cost,0), ib.unit_cost_orig, ib.unit_cost, 0) * COALESCE(sba.quantity_from_batch,0)) AS tc
+                                    SUM(COALESCE(NULLIF(sba.unit_cost,0), ib.unit_cost_base, ib.unit_cost_orig, ib.unit_cost, 0) * COALESCE(sba.quantity_from_batch,0)) AS tc
                                 FROM sale_batch_allocations sba
                                 LEFT JOIN import_batches ib ON sba.batch_id = ib.id
                                 WHERE sba.product_id = ?
@@ -2025,7 +2314,7 @@ def get_monthly_return_impact(year: int):
                             cur2.execute('''
                                 SELECT 
                                     SUM(COALESCE(sba.quantity_from_batch,0)) AS tq,
-                                    SUM(COALESCE(NULLIF(sba.unit_cost,0), ib.unit_cost_orig, ib.unit_cost, 0) * COALESCE(sba.quantity_from_batch,0)) AS tc
+                                    SUM(COALESCE(NULLIF(sba.unit_cost,0), ib.unit_cost_base, ib.unit_cost_orig, ib.unit_cost, 0) * COALESCE(sba.quantity_from_batch,0)) AS tc
                                 FROM sale_batch_allocations sba
                                 LEFT JOIN import_batches ib ON sba.batch_id = ib.id
                                 WHERE sba.product_id = ?
@@ -2337,7 +2626,7 @@ def list_returns():
         cur.execute('''
             SELECT id, return_date, product_id, sale_date, category, subcategory,
                    unit_price, selling_price, platform, refund_amount, refund_currency,
-                   refund_amount_base, restock, reason, doc_paths
+                   refund_amount_base, restock, reason, doc_paths, restock_processed
             FROM returns
             ORDER BY return_date DESC, id DESC
         ''')
@@ -2348,12 +2637,12 @@ def list_returns():
         return []
 
 
-def insert_return(fields: Dict[str, Any]) -> Optional[int]:
+def insert_return(fields: Dict[str, Any]) -> Optional[dict]:
     """Insert a new return row and compute refund_amount_base.
     Expects keys: return_date, product_id, sale_date, category, subcategory,
     unit_price, selling_price, platform, refund_amount, refund_currency,
     restock, reason, doc_paths (string JSON or list/single path).
-    Returns the new id or None on failure.
+    Returns a dict {'id': new_id, 'restocked_batches': [...]} on success, or None on failure.
     """
     try:
         # Normalize inputs
@@ -2405,20 +2694,102 @@ def insert_return(fields: Dict[str, Any]) -> Optional[int]:
 
         refund_base = _compute_refund_base(rd, refund_amount, refund_currency)
 
+        # Use a single DB connection/transaction so insert + optional restock is atomic
         conn = get_conn()
-        cur = conn.cursor()
-        cur.execute('''
-            INSERT INTO returns (
-                return_date, product_id, sale_date, category, subcategory,
-                unit_price, selling_price, platform, refund_amount,
-                refund_currency, refund_amount_base, restock, reason, doc_paths
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-        ''', (rd, pid, sale_date, category, subcategory, float(unit_price or 0.0), float(selling_price or 0.0),
-              platform, float(refund_amount or 0.0), refund_currency or None, float(refund_base or 0.0), int(restock or 0), reason, doc_paths))
-        new_id = cur.lastrowid
-        conn.commit()
-        conn.close()
-        return int(new_id)
+        try:
+            cur = conn.cursor()
+            cur.execute('''
+                INSERT INTO returns (
+                    return_date, product_id, sale_date, category, subcategory,
+                    unit_price, selling_price, platform, refund_amount,
+                    refund_currency, refund_amount_base, restock, reason, doc_paths
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            ''', (rd, pid, sale_date, category, subcategory, float(unit_price or 0.0), float(selling_price or 0.0),
+                  platform, float(refund_amount or 0.0), refund_currency or None, float(refund_base or 0.0), int(restock or 0), reason, doc_paths))
+            new_id = cur.lastrowid
+
+            # If restock requested, try to return units to the original batches and update inventory
+            returned = []
+            if int(restock or 0) == 1 and pid:
+                try:
+                    # Use the same connection to update import_batches so it's in same transaction
+                    # We'll mimic handle_return_batch_allocation logic here but using this cursor
+                    remaining_to_return = 1.0
+                    cur.execute('''
+                        SELECT batch_id, quantity_from_batch, unit_cost
+                        FROM sale_batch_allocations
+                        WHERE product_id = ?
+                        ORDER BY id DESC
+                    ''', (pid,))
+                    allocations = cur.fetchall()
+                    for alloc in allocations:
+                        if remaining_to_return <= 0:
+                            break
+                        batch_id = alloc[0]
+                        original_allocation = float(alloc[1] or 0.0)
+                        unit_cost = float(alloc[2] or 0.0)
+                        if batch_id is None:
+                            continue
+                        return_to_batch = min(remaining_to_return, original_allocation)
+                        cur.execute('UPDATE import_batches SET remaining_quantity = remaining_quantity + ? WHERE id = ?',
+                                   (return_to_batch, batch_id))
+                        cur.execute('SELECT batch_date, supplier, category, subcategory FROM import_batches WHERE id = ?', (batch_id,))
+                        batch_info = cur.fetchone()
+                        returned.append({
+                            'batch_id': batch_id,
+                            'batch_date': batch_info[0] if batch_info else 'Unknown',
+                            'supplier': batch_info[1] if batch_info else 'Unknown',
+                            'category': batch_info[2] if batch_info else '',
+                            'subcategory': batch_info[3] if batch_info else '',
+                            'returned_quantity': return_to_batch,
+                            'unit_cost': unit_cost
+                        })
+                        remaining_to_return -= return_to_batch
+                except Exception:
+                    # Any exception here should rollback the whole transaction below
+                    raise
+                try:
+                    # Update the inventory summary using same connection
+                    cur.execute('SELECT id, quantity FROM inventory WHERE category = ? AND subcategory = ? LIMIT 1', (category or '', subcategory or ''))
+                    inv = cur.fetchone()
+                    if inv:
+                        cur.execute('UPDATE inventory SET quantity = quantity + ?, last_updated = CURRENT_TIMESTAMP WHERE id = ?', (1.0, inv[0]))
+                    else:
+                        cur.execute('INSERT INTO inventory(category, subcategory, quantity, last_updated) VALUES(?,?,?,CURRENT_TIMESTAMP)', (category or '', subcategory or '', 1.0))
+                except Exception:
+                    raise
+
+            # If we returned units successfully, mark restock_processed on the inserted return
+            try:
+                if returned and int(restock or 0) == 1:
+                    cur.execute('UPDATE returns SET restock_processed = 1 WHERE id = ?', (new_id,))
+            except Exception:
+                # Non-fatal; but if this fails we'll still commit the other changes
+                pass
+
+            # Commit transaction
+            # If we returned units successfully, mark restock_processed on the inserted return
+            try:
+                if returned and int(restock or 0) == 1:
+                    cur.execute('UPDATE returns SET restock_processed = 1 WHERE id = ?', (new_id,))
+            except Exception:
+                # Non-fatal; but if this fails we'll still commit the other changes
+                pass
+
+            # Commit transaction
+            conn.commit()
+            conn.close()
+            return {'id': int(new_id), 'restocked_batches': returned}
+        except Exception:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            try:
+                conn.close()
+            except Exception:
+                pass
+            return None
     except Exception:
         try:
             conn.close()

@@ -36,6 +36,20 @@ def main():
         maximize_window(root)
     except Exception:
         pass
+    # Ensure base currency is configured on first run. We require an initial base currency to be set
+    # and then make it immutable in settings to preserve historical data integrity.
+    try:
+        from db.db import get_setting
+        if not get_setting('base_currency'):
+            # Simple modal prompt for base currency
+            def ask_base_currency():
+                from ui.settings_window import open_settings_window
+                messagebox.showinfo('Initial Setup', 'Please choose the application base currency. This will be locked for historical consistency.')
+                open_settings_window(root)
+            ask_base_currency()
+    except Exception:
+        pass
+
     if not open_login_dialog(root):
         try:
             root.destroy()

@@ -12,29 +12,17 @@ Date, Category, Subcategory, Quantity, UnitPrice, SellingPrice, Platform, Produc
 SaleFXToTRY, SellingPriceBase
 """
 
-# Use the project data/sales.csv as per user request
-SALES_CSV = Path(__file__).resolve().parents[2] / 'data' / 'sales.csv'
-OLD_SALES_CSV = Path(__file__).resolve().parents[2] / 'sales.csv'
+# Use the project data/sales.csv
+SALES_CSV = Path(__file__).resolve().parents[1] / 'data' / 'sales.csv'
 
 
 def ensure_sales_csv():
-    # Ensure data directory exists and migrate old root sales.csv if present
+    # Ensure data directory exists
     try:
         SALES_CSV.parent.mkdir(parents=True, exist_ok=True)
-        if not SALES_CSV.exists() and OLD_SALES_CSV.exists():
-            try:
-                OLD_SALES_CSV.replace(SALES_CSV)
-            except Exception:
-                # fallback: copy content then remove old
-                with OLD_SALES_CSV.open('r', newline='') as src, SALES_CSV.open('w', newline='') as dst:
-                    dst.write(src.read())
-                try:
-                    OLD_SALES_CSV.unlink()
-                except Exception:
-                    pass
     except Exception:
         pass
-    desired = ['Date', 'Category', 'Subcategory', 'Quantity', 'UnitPrice', 'SellingPrice', 'Platform', 'ProductID', 'CustomerID', 'DocumentPath', 'SaleFXToTRY', 'SellingPriceBase']
+    desired = ['Date', 'Category', 'Subcategory', 'Quantity', 'UnitPrice', 'SellingPrice', 'Platform', 'ProductID', 'CustomerID', 'DocumentPath', 'FXToBase', 'SellingPriceBase', 'SaleCurrency']
     if not SALES_CSV.exists():
         with SALES_CSV.open('w', newline='') as f:
             csv.writer(f).writerow(desired)
@@ -67,9 +55,10 @@ def ensure_sales_csv():
                 'ProductID': rowd.get('ProductID', ''),
                 'CustomerID': rowd.get('CustomerID', ''),
                 'DocumentPath': rowd.get('DocumentPath', ''),
-                'SaleFXToTRY': rowd.get('SaleFXToTRY', ''),
+                'FXToBase': rowd.get('FXToBase', rowd.get('SaleFXToTRY', '')),
                 # Backward compatibility: migrate old SellingPriceUSD to SellingPriceBase
                 'SellingPriceBase': rowd.get('SellingPriceBase', rowd.get('SellingPriceUSD', '')),
+                    'SaleCurrency': rowd.get('SaleCurrency', ''),
             })
         with SALES_CSV.open('w', newline='') as f:
             w = csv.DictWriter(f, fieldnames=desired)
@@ -82,7 +71,7 @@ def ensure_sales_csv():
 
 def append_sale(row_dict):
     ensure_sales_csv()
-    cols = ['Date', 'Category', 'Subcategory', 'Quantity', 'UnitPrice', 'SellingPrice', 'Platform', 'ProductID', 'CustomerID', 'DocumentPath', 'SaleFXToTRY', 'SellingPriceBase']
+    cols = ['Date', 'Category', 'Subcategory', 'Quantity', 'UnitPrice', 'SellingPrice', 'Platform', 'ProductID', 'CustomerID', 'DocumentPath', 'FXToBase', 'SellingPriceBase', 'SaleCurrency']
     with SALES_CSV.open('a', newline='') as f:
         writer = csv.DictWriter(f, fieldnames=cols)
         writer.writerow({k: row_dict.get(k, '') for k in cols})
@@ -698,11 +687,12 @@ def open_sales_window(root):
                 'Quantity': 1,
                 'UnitPrice': unit,
                 'SellingPrice': unit,
+                'SaleCurrency': (sale_ccy_var.get() or ''),
                 'Platform': platform,
                 'ProductID': pid,
                 'CustomerID': customer_id or '',
                 'DocumentPath': '',
-                'SaleFXToTRY': fx,
+                'FXToBase': fx,
                 'SellingPriceBase': usd_unit,
             })
 

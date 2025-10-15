@@ -9,8 +9,8 @@ import subprocess
 from .theme import stripe_treeview, maximize_window, themed_button
 import core.fx_rates as fx_rates
 
-SALES_CSV = Path(__file__).resolve().parents[2] / 'data' / 'sales.csv'
-RETURNS_CSV = Path(__file__).resolve().parents[2] / 'data' / 'returns.csv'
+SALES_CSV = Path(__file__).resolve().parents[1] / 'data' / 'sales.csv'
+RETURNS_CSV = Path(__file__).resolve().parents[1] / 'data' / 'returns.csv'
 
 
 def read_sales():
@@ -24,6 +24,16 @@ def read_sales():
             for r in rows:
                 if 'SellingPriceBase' not in r or not r.get('SellingPriceBase'):
                     r['SellingPriceBase'] = r.get('SellingPriceUSD', '')
+        # Normalize FX and currency columns: support legacy SaleFXToTRY and new FXToBase
+        if rows and 'FXToBase' not in reader.fieldnames:
+            for r in rows:
+                # Prefer FXToBase, fallback to SaleFXToTRY if present
+                if 'FXToBase' not in r or not r.get('FXToBase'):
+                    if 'SaleFXToTRY' in r and r.get('SaleFXToTRY'):
+                        r['FXToBase'] = r.get('SaleFXToTRY')
+                    else:
+                        r['FXToBase'] = ''
+
         # Inject SaleCurrency if missing
         if rows and 'SaleCurrency' not in reader.fieldnames:
             try:
@@ -38,7 +48,7 @@ def read_sales():
 
 
 # Include SaleCurrency to capture the currency in which the sale occurred.
-DESIRED_COLS = ['Date', 'Category', 'Subcategory', 'Quantity', 'UnitPrice', 'SellingPrice', 'Platform', 'ProductID', 'CustomerID', 'DocumentPath', 'SaleFXToTRY', 'SellingPriceBase', 'SaleCurrency']
+DESIRED_COLS = ['Date', 'Category', 'Subcategory', 'Quantity', 'UnitPrice', 'SellingPrice', 'Platform', 'ProductID', 'CustomerID', 'DocumentPath', 'FXToBase', 'SellingPriceBase', 'SaleCurrency']
 
 
 def write_sales(rows):
@@ -117,20 +127,28 @@ def read_returns():
         # Map to a CSV-like dict for compatibility where used
         out = []
         for r in rows:
+            try:
+                # sqlite3.Row doesn't implement .get, so convert to dict safely
+                if hasattr(r, 'keys'):
+                    rr = {k: r[k] for k in r.keys()}
+                else:
+                    rr = dict(r)
+            except Exception:
+                rr = {}
             out.append({
-                'ReturnDate': r.get('return_date',''),
-                'ProductID': r.get('product_id',''),
-                'SaleDate': r.get('sale_date',''),
-                'Category': r.get('category',''),
-                'Subcategory': r.get('subcategory',''),
-                'UnitPrice': r.get('unit_price',''),
-                'SellingPrice': r.get('selling_price',''),
-                'Platform': r.get('platform',''),
-                'RefundAmount': r.get('refund_amount',''),
-                'RefundCurrency': r.get('refund_currency',''),
-                'Restock': r.get('restock',''),
-                'Reason': r.get('reason',''),
-                'ReturnDocPath': r.get('doc_paths',''),
+                'ReturnDate': rr.get('return_date',''),
+                'ProductID': rr.get('product_id',''),
+                'SaleDate': rr.get('sale_date',''),
+                'Category': rr.get('category',''),
+                'Subcategory': rr.get('subcategory',''),
+                'UnitPrice': rr.get('unit_price',''),
+                'SellingPrice': rr.get('selling_price',''),
+                'Platform': rr.get('platform',''),
+                'RefundAmount': rr.get('refund_amount',''),
+                'RefundCurrency': rr.get('refund_currency',''),
+                'Restock': rr.get('restock',''),
+                'Reason': rr.get('reason',''),
+                'ReturnDocPath': rr.get('doc_paths',''),
             })
         return out
     except Exception:
@@ -201,7 +219,8 @@ def open_view_sales_window(root):
         'Quantity': {'width': 70, 'anchor': 'center'},
         'UnitPrice': {'width': 80, 'anchor': 'e'},
         'SellingPrice': {'width': 90, 'anchor': 'e'},
-    'SaleFXToTRY': {'width': 120, 'anchor': 'e'},
+    'SaleCurrency': {'width': 80, 'anchor': 'center'},
+    'FXToBase': {'width': 120, 'anchor': 'e'},
     'SellingPriceBase': {'width': 140, 'anchor': 'e'},
         'Platform': {'width': 100, 'anchor': 'w'},
         'ProductID': {'width': 120, 'anchor': 'center'},
@@ -377,7 +396,6 @@ def open_view_sales_window(root):
         total_sell = 0.0
         total_sell_usd = 0.0
         computed_usd_count = 0
-        # Build set of returned ProductIDs
         returned_ids = set()
         try:
             for rr in read_returns():
@@ -387,21 +405,18 @@ def open_view_sales_window(root):
         except Exception:
             returned_ids = set()
         for idx, r in enumerate(all_rows):
+            is_returned = (r.get('ProductID') or '').strip() in returned_ids
             if row_matches_year(r, yy) and row_matches_search(r, q) and row_matches_returned(r, return_var.get(), returned_ids):
                 vals = [r.get(c, '') for c in cols]
-                
-                # Enhance display values
+                # Mark returned items visually
                 try:
-                    # Mark returned items
                     pid_idx = cols.index('ProductID')
                     pidv = str(vals[pid_idx])
                     if pidv in returned_ids:
                         vals[pid_idx] = pidv + ' (Returned)'
                 except Exception:
                     pass
-                
                 try:
-                    # Show customer name instead of ID
                     customer_idx = cols.index('CustomerID')
                     customer_id = str(vals[customer_idx])
                     if customer_id and customer_id in customer_names:
@@ -412,8 +427,6 @@ def open_view_sales_window(root):
                         vals[customer_idx] = ""
                 except Exception:
                     pass
-                
-                # Display-friendly DocumentPath: show count if multiple
                 try:
                     doc_idx = cols.index('DocumentPath')
                     doc_raw = r.get('DocumentPath', '')
@@ -426,38 +439,49 @@ def open_view_sales_window(root):
                         vals[doc_idx] = f"{len(doc_list)} docs"
                 except Exception:
                     pass
-
-                tree.insert('', tk.END, iid=str(idx), values=vals)
+                # Insert row and apply tag for returned
+                tag = 'returned' if is_returned else ''
+                tree.insert('', tk.END, iid=str(idx), values=vals, tags=(tag,))
                 shown += 1
-                try:
-                    total_sell += float(r.get('SellingPrice') or 0)
-                except Exception:
-                    pass
-                # Prefer stored USD; if missing, compute using fx_rates for row date
-                usd_val = None
-                try:
-                    usd_val = float(r.get('SellingPriceUSD')) if r.get('SellingPriceUSD') not in (None, '') else None
-                except Exception:
-                    usd_val = None
-                if usd_val is None:
+                # Only count non-returned sales in totals
+                if not is_returned:
                     try:
-                        rate = fx_rates.get_rate_for_date(str(r.get('Date') or '').strip())
-                        if rate and rate > 0:
-                            usd_val = float(r.get('SellingPrice') or 0) / float(rate)
-                            computed_usd_count += 1
-                    except Exception:
-                        usd_val = None
-                if usd_val is not None:
-                    try:
-                        total_sell_usd += float(usd_val)
+                        total_sell += float(r.get('SellingPrice') or 0)
                     except Exception:
                         pass
+                    usd_val = None
+                    try:
+                        usd_val = float(r.get('SellingPriceUSD')) if r.get('SellingPriceUSD') not in (None, '') else None
+                    except Exception:
+                        usd_val = None
+                    if usd_val is None:
+                        try:
+                            rate = fx_rates.get_rate_for_date(str(r.get('Date') or '').strip())
+                            if rate and rate > 0:
+                                usd_val = float(r.get('SellingPrice') or 0) / float(rate)
+                                computed_usd_count += 1
+                        except Exception:
+                            usd_val = None
+                    if usd_val is not None:
+                        try:
+                            total_sell_usd += float(usd_val)
+                        except Exception:
+                            pass
         suffix = f" (computed {computed_usd_count} from rates)" if computed_usd_count else ""
         totals_var.set(f"Items: {shown}    Total Selling (TRY): {total_sell:.2f}    Total Selling (USD): {total_sell_usd:.2f}{suffix}")
+        # Highlight returned rows — make them more visually noticeable
         try:
+            # Apply striping first, then override returned tag so it stands out
             stripe_treeview(tree)
+            # Stronger background and amber text, bold font for emphasis (distinct from error red)
+            tree.tag_configure('returned', background='#fff9e6', foreground='#8a6d00', font=('', 9, 'bold'))
+            # Also configure a visible border-like highlight when possible
+            # (Some themes may ignore font or foreground on Treeview tags; this still helps on most platforms)
         except Exception:
-            pass
+            try:
+                tree.tag_configure('returned', background='#fff4cc')
+            except Exception:
+                pass
 
     # Initial options and population
     year_combo['values'] = compute_year_options(rows)
@@ -632,19 +656,9 @@ def open_view_sales_window(root):
             try:
                 # Determine restock final decision with confirmation if requested
                 restock_final = 0
-                restocked_batches = []
                 if restock_var.get():
                     if messagebox.askyesno('Confirm Restock', 'Return item to original batch inventory? The product may be broken. Proceed?', parent=dlg):
                         restock_final = 1
-                        try:
-                            import db.db as db
-                            # Use batch-aware return handling
-                            restocked_batches = db.handle_return_batch_allocation(pid, 1.0)
-                            # Also update the general inventory
-                            db.update_inventory(rec.get('Category',''), rec.get('Subcategory',''), 1)
-                        except Exception as e:
-                            messagebox.showwarning('Batch Restock Warning', 
-                                f'General inventory updated, but batch restock failed: {e}', parent=dlg)
                     else:
                         restock_final = 0
 
@@ -658,7 +672,7 @@ def open_view_sales_window(root):
                     except Exception:
                         refund_ccy = ''
                 # Build fields and insert
-                db.insert_return({
+                res = db.insert_return({
                     'return_date': d,
                     'product_id': pid,
                     'sale_date': rec.get('Date',''),
@@ -673,21 +687,28 @@ def open_view_sales_window(root):
                     'reason': reason_var.get().strip(),
                     'doc_paths': doc_entry.get().strip(),
                 })
-                
-                # Show batch restock confirmation
-                if restock_final and restocked_batches:
-                    batch_info = []
-                    for batch in restocked_batches:
-                        info = f"Batch {batch['batch_id']} ({batch['batch_date']}, {batch['supplier']}): +{batch['returned_quantity']}"
-                        batch_info.append(info)
-                    
-                    if batch_info:
-                        msg = f"✅ Return processed with batch tracking:\n\n"
-                        msg += f"🔄 Restocked to batches:\n" + "\n".join(batch_info)
-                        messagebox.showinfo('Return Completed with Batch Tracking', msg, parent=dlg)
+                # Show batch restock confirmation if insert_return returned restocked details
+                try:
+                    if res and isinstance(res, dict) and res.get('restocked_batches'):
+                        batch_info = []
+                        for batch in res.get('restocked_batches'):
+                            info = f"Batch {batch['batch_id']} ({batch['batch_date']}, {batch['supplier']}): +{batch['returned_quantity']}"
+                            batch_info.append(info)
+                        if batch_info:
+                            msg = f"✅ Return processed with batch tracking:\n\n"
+                            msg += f"🔄 Restocked to batches:\n" + "\n".join(batch_info)
+                            messagebox.showinfo('Return Completed with Batch Tracking', msg, parent=dlg)
+                except Exception:
+                    pass
                 
                 dlg.destroy()
+                # Refresh the sales view immediately
                 refresh()
+                # Emit a virtual event so other windows can refresh (e.g., batch analytics)
+                try:
+                    win.event_generate('<<ReturnRecorded>>')
+                except Exception:
+                    pass
             except Exception as e:
                 messagebox.showerror('Error', f'Failed to record return: {e}', parent=dlg)
 
@@ -995,8 +1016,8 @@ def open_view_sales_window(root):
                      font=('', 10)).pack(anchor='w')
         else:
             # Summary
-            total_cost = sum(a['quantity_from_batch'] * a['unit_cost'] for a in allocations)
-            total_revenue = sum(a['quantity_from_batch'] * a['unit_sale_price'] for a in allocations)
+            total_cost = sum(float(a.get('quantity_from_batch') or 0) * float(a.get('unit_cost') or 0) for a in allocations)
+            total_revenue = sum(float(a.get('quantity_from_batch') or 0) * float(a.get('unit_sale_price') or 0) for a in allocations)
             total_profit = total_revenue - total_cost
             margin = (total_profit / total_revenue * 100) if total_revenue > 0 else 0
             
@@ -1020,16 +1041,16 @@ def open_view_sales_window(root):
                 tree.column(col, width=100, minwidth=60)
             
             for alloc in allocations:
-                total_item_profit = alloc['quantity_from_batch'] * alloc['profit_per_unit']
+                total_item_profit = float(alloc.get('quantity_from_batch') or 0) * float(alloc.get('profit_per_unit') or 0)
                 values = [
                     str(alloc['batch_id']) if alloc['batch_id'] else 'SHORTAGE',
                     alloc.get('batch_date', 'N/A'),
                     alloc.get('supplier', 'N/A'),
-                    f"{alloc['quantity_from_batch']:.1f}",
-                    f"${alloc['unit_cost']:.2f}",
-                    f"${alloc['unit_sale_price']:.2f}",
-                    f"${alloc['profit_per_unit']:.2f}",
-                    f"${total_item_profit:.2f}"
+                    f"{float(alloc.get('quantity_from_batch') or 0):.1f}",
+                    f"${float(alloc.get('unit_cost') or 0):.2f}",
+                    f"${float(alloc.get('unit_sale_price') or 0):.2f}",
+                    f"${float(alloc.get('profit_per_unit') or 0):.2f}",
+                    f"${float(total_item_profit or 0):.2f}"
                 ]
                 
                 item_id = tree.insert('', 'end', values=values)

@@ -38,7 +38,7 @@ def open_view_imports_window(root):
 
     # Determine columns but hide FX and currency (imports are USD-only now)
     all_cols = list(rows[0].keys())
-    cols = [c for c in all_cols if c not in ('fx_to_try', 'currency')]
+    cols = [c for c in all_cols if c not in ('fx_to_base', 'currency')]
     tree = ttk.Treeview(window, columns=cols, show='headings')
     for c in cols:
         tree.heading(c, text=c)
@@ -201,8 +201,8 @@ def open_view_imports_window(root):
                 new_price = float(entries.get('ordered_price').get().strip() or 0)
                 new_qty = float(entries.get('quantity').get().strip() or 0)
                 fx_val = None
-                if 'fx_to_try' in entries:
-                    txt = entries.get('fx_to_try').get().strip()
+                if 'fx_to_base' in entries:
+                    txt = entries.get('fx_to_base').get().strip()
                     if txt:
                         v = float(txt)
                         if v <= 0:
@@ -218,7 +218,7 @@ def open_view_imports_window(root):
                     entries.get('notes').get().strip(),
                     entries.get('category').get().strip(),
                     entries.get('subcategory').get().strip(),
-                    fx_to_try=fx_val
+                    fx_override=fx_val
                 )
                 f.destroy()
                 refresh()

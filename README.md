@@ -8,6 +8,16 @@ A simple desktop app to track imports, inventory, sales, expenses, returns, and 
 - Imports, Sales, Expenses, Returns with multi‑document attachments
 - FIFO batch tracking with per‑sale cost/profit and optional expense apportion
 - Base currency and date‑based FX rates (Frankfurter) with local cache
+
+## Recent updates (important)
+
+- Base currency is now selected once during the application's initial setup and is intentionally locked thereafter to preserve historical accounting data. On first run the app will prompt you to choose the base currency. The Settings window shows the chosen base but will not allow changing it — changing the stored base requires an explicit migration (backup + dry-run + audit) and is not performed automatically.
+
+- Import batches now persist the FX rate and the unit cost in base currency (`fx_to_base` and `unit_cost_base`) at the time of import. The Record Import UI shows a suggested FX rate (from cached historical rates) and allows a manual override which is then persisted with the import batch.
+
+- Returns have been migrated into the DB (stored with `refund_amount_base`) and the `insert_return()` flow is atomic: when a return is recorded with restock enabled the app will update import batch remaining quantities and inventory and mark the return as `restock_processed` to avoid double-application. Returns now affect analytics (monthly/yearly and batch reports) — returned rows are visually marked in the Sales view and analytics prefer the persisted base-costs when available.
+
+- Analytics & Reporting: reporting functions prefer the stored `unit_cost_base`/`fx_to_base` values for reproducible historical COGS and profit calculations. If historical batches lack `unit_cost_base`, the app can fall back to original columns or a backfill script (recommended) can compute and persist missing base-costs.
 - Suppliers and Customers directories (optional linkage)
 - Consistent, themed UI with sortable/searchable tables
 - Login with hashed passwords and audit log (admin features in UI)
