@@ -1,6 +1,5 @@
 import tkinter as tk
 from tkinter import ttk, messagebox
-from pathlib import Path
 import db.db as db
 from .theme import stripe_treeview, maximize_window, themed_button
 
