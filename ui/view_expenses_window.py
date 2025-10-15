@@ -150,6 +150,14 @@ def open_view_expenses_window(root):
     selected_var = tk.StringVar(value='Selected: 0')
     ttk.Label(totals_row, textvariable=selected_var, anchor='e').pack(side='right')
 
+    # Show deleted toggle (defaults to hiding deleted rows)
+    show_deleted_var = tk.BooleanVar(value=False)
+    try:
+        cb = ttk.Checkbutton(totals_row, text='Show deleted', variable=show_deleted_var, command=lambda: refresh())
+        cb.pack(side='right', padx=(8, 0))
+    except Exception:
+        pass
+
     def parse_docs(val):
         if val is None:
             return []
@@ -176,13 +184,32 @@ def open_view_expenses_window(root):
 
     records_by_iid = {}
 
+    def _fetch_expenses(include_deleted: bool = False):
+        # When include_deleted is True, query DB directly to include deleted flag
+        if include_deleted:
+            try:
+                conn = db.get_conn()
+                cur = conn.cursor()
+                cur.execute('SELECT id, date, amount, is_import_related, import_id, category, notes, document_path, currency, deleted FROM expenses ORDER BY id DESC')
+                rows = [dict(r) for r in cur.fetchall()]
+                conn.close()
+                # decrypt notes
+                for r in rows:
+                    r['notes'] = db.decrypt_str(r.get('notes')) if hasattr(db, 'decrypt_str') else r.get('notes')
+                return rows
+            except Exception:
+                return []
+        # Default: use public API which hides deleted rows by design
+        return db.get_expenses()
+
+
     def populate():
         for r in tree.get_children():
             tree.delete(r)
         records_by_iid.clear()
         count = 0
         total_amount = 0.0
-        for row in db.get_expenses():
+        for row in _fetch_expenses(include_deleted=show_deleted_var.get()):
             if row_matches(row, search_var.get().strip()):
                 # Build display values in the friendly order
                 try:
@@ -205,7 +232,9 @@ def open_view_expenses_window(root):
                     'Document': doc_disp,
                 }
                 vals = [row_vals.get(c, '') for c in cols]
-                iid = tree.insert('', tk.END, values=vals)
+                # Use DB id as iid so undelete maps back easily
+                iid = str(row.get('id'))
+                tree.insert('', tk.END, iid=iid, values=vals)
                 records_by_iid[iid] = row
                 count += 1
                 try:
@@ -248,6 +277,28 @@ def open_view_expenses_window(root):
                 refresh()
             except Exception as e:
                 messagebox.showerror('Error', f'Failed to delete: {e}')
+
+    def do_undelete():
+        sel = tree.selection()
+        if not sel:
+            messagebox.showwarning('Select', 'Select at least one row first')
+            return
+        count = len(sel)
+        if not messagebox.askyesno('Confirm', f'Undelete {count} selected expenses?'):
+            return
+        any_done = False
+        for iid in sel:
+            try:
+                eid = int(iid)
+            except Exception:
+                continue
+            try:
+                if db.undelete_expense(eid):
+                    any_done = True
+            except Exception:
+                continue
+        if any_done:
+            refresh()
 
     def do_edit():
         rec = get_selected()
@@ -716,5 +767,6 @@ def open_view_expenses_window(root):
     secondary_frame.pack(side='right')
     themed_button(secondary_frame, text='📂 Documents', variant='secondary', command=do_manage_docs).pack(side=tk.LEFT, padx=4)
     themed_button(secondary_frame, text='🗑️ Delete', variant='danger', command=do_delete).pack(side=tk.LEFT, padx=(8, 0))
+    themed_button(secondary_frame, text='♻️ Undelete', variant='primary', command=do_undelete).pack(side=tk.LEFT, padx=4)
     
     btn_frame.pack(fill='x', pady=8)

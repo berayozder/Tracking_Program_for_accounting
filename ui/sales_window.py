@@ -330,8 +330,10 @@ def open_sales_window(root):
             return
         sel = lb.curselection()
         if sel:
+            # Insert the picked platform as uppercase normalized value
+            picked = (lb.get(sel[0]) or '').strip().upper()
             platform_e.delete(0, tk.END)
-            platform_e.insert(0, lb.get(sel[0]))
+            platform_e.insert(0, picked)
         _destroy_plat_dropdown()
         # After picking platform, move focus to customer (optional) or quantity
         try:
@@ -343,7 +345,7 @@ def open_sales_window(root):
                 pass
 
     def show_plat_suggestions(event=None):
-        q = platform_e.get().strip().lower()
+        q = (platform_e.get() or '').strip().lower()
         names = load_platform_suggestions()
         # If query empty, show all; else filter
         matches = names if not q else [n for n in names if q in n.lower()]
@@ -364,7 +366,11 @@ def open_sales_window(root):
                 lb = winp.listbox
             lb.delete(0, tk.END)
             for m in matches[:8]:
-                lb.insert(tk.END, m)
+                # show suggestions as uppercase for consistency
+                try:
+                    lb.insert(tk.END, (m or '').strip().upper())
+                except Exception:
+                    lb.insert(tk.END, m)
             try:
                 x = win.winfo_rootx() + platform_e.winfo_rootx() - win.winfo_x()
                 y = win.winfo_rooty() + platform_e.winfo_rooty() - win.winfo_y() + platform_e.winfo_height()
@@ -578,7 +584,8 @@ def open_sales_window(root):
         if fx <= 0:
             messagebox.showerror('Invalid FX', 'FX rate must be greater than 0')
             return
-        platform = platform_e.get().strip()
+        # Normalize platform input to uppercase for consistent storage
+        platform = (platform_e.get() or '').strip().upper()
         # Cache FX for this date if known USD/TRY pair
         try:
             from_ccy = (sale_ccy_var.get() or 'TRY').upper()

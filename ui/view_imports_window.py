@@ -108,12 +108,27 @@ def open_view_imports_window(root):
     selected_var = tk.StringVar(value='Selected: 0')
     ttk.Label(totals_row, textvariable=selected_var, anchor='e').pack(side='right')
 
+    show_deleted_var = tk.BooleanVar(value=False)
+
+    def _fetch_imports(include_deleted: bool = False):
+        if include_deleted:
+            try:
+                conn = db.get_conn()
+                cur = conn.cursor()
+                cur.execute('SELECT id, date, ordered_price, quantity, supplier, notes, category, subcategory, currency, deleted FROM imports ORDER BY id DESC')
+                rows = [dict(r) for r in cur.fetchall()]
+                conn.close()
+                return rows
+            except Exception:
+                return []
+        return db.get_imports()
+
     def populate():
         for r in tree.get_children():
             tree.delete(r)
         total_qty = 0.0
         total_cost_usd = 0.0
-        for row in db.get_imports():
+        for row in _fetch_imports(show_deleted_var.get()):
             if row_matches(row, search_var.get().strip()):
                 tree.insert('', tk.END, values=[row.get(c, '') for c in cols])
                 try:
@@ -139,6 +154,29 @@ def open_view_imports_window(root):
     def refresh():
         populate()
 
+    def do_undelete():
+        sel = tree.selection()
+        if not sel:
+            messagebox.showwarning('Select', 'Select at least one row first')
+            return
+        count = len(sel)
+        if not messagebox.askyesno('Confirm', f'Undelete {count} selected imports?'):
+            return
+        any_done = False
+        for iid in sel:
+            try:
+                vals = tree.item(iid).get('values', ())
+                rec = {c: vals[i] for i, c in enumerate(cols) if i < len(vals)}
+                iid_val = rec.get('id') or (vals[0] if vals else None)
+                if iid_val is None:
+                    continue
+                db.undelete_import(int(iid_val))
+                any_done = True
+            except Exception:
+                continue
+        if any_done:
+            refresh()
+
     def on_search_change(event=None):
         populate()
 
@@ -160,16 +198,33 @@ def open_view_imports_window(root):
         return {c: vals[i] for i, c in enumerate(cols)}
 
     def do_delete():
-        rec = get_selected_import()
-        if not rec:
-            messagebox.showwarning('Select', 'Select a row first')
+        sel = tree.selection()
+        if not sel:
+            messagebox.showwarning('Select', 'Select at least one row first')
             return
-        if messagebox.askyesno('Confirm', 'Delete selected import?'):
+        count = len(sel)
+        if count == 1:
+            prompt = 'Soft-delete the selected import? This will hide it from views but keep a record.'
+        else:
+            prompt = f'Soft-delete {count} selected imports? This will hide them from views but keep records.'
+        if not messagebox.askyesno('Confirm', prompt):
+            return
+
+        any_deleted = False
+        for iid in sel:
             try:
-                db.delete_import(int(rec.get('id')))
-                refresh()
-            except Exception as e:
-                messagebox.showerror('Error', f'Failed to delete: {e}')
+                vals = tree.item(iid).get('values', ())
+                # map back to dict by cols
+                rec = {c: vals[i] for i, c in enumerate(cols) if i < len(vals)}
+                iid_val = rec.get('id') or (vals[0] if vals else None)
+                if iid_val is None:
+                    continue
+                db.delete_import(int(iid_val))
+                any_deleted = True
+            except Exception:
+                continue
+        if any_deleted:
+            refresh()
 
     def do_edit():
         rec = get_selected_import()
@@ -245,8 +300,11 @@ def open_view_imports_window(root):
             pass
     themed_button(primary_frame, text='Deselect All', variant='primary', command=lambda: (deselect_all(), _update_selected_badge())).pack(side=tk.LEFT, padx=4)
 
+    # Secondary actions: edit, delete, undelete, export
     themed_button(secondary_frame, text='✏️ Edit', variant='success', command=do_edit).pack(side=tk.LEFT, padx=4)
     themed_button(secondary_frame, text='🗑️ Delete', variant='danger', command=do_delete).pack(side=tk.LEFT, padx=4)
+    ttk.Checkbutton(secondary_frame, text='Show deleted', variable=show_deleted_var, command=refresh).pack(side=tk.LEFT, padx=(6, 4))
+    themed_button(secondary_frame, text='♻️ Undelete', variant='primary', command=do_undelete).pack(side=tk.LEFT, padx=4)
     themed_button(secondary_frame, text='📄 Export CSV', variant='secondary', command=lambda: export_treeview_csv(window, tree, cols, 'Export Imports')).pack(side=tk.LEFT, padx=(8, 0))
 
     btn_frame.pack(fill='x', pady=8)

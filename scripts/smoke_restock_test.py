@@ -8,10 +8,10 @@ from db import db
 db.init_db()
 conn = db.get_conn()
 cur = conn.cursor()
-# Clean tables for test
-cur.execute("DELETE FROM sale_batch_allocations")
-cur.execute("DELETE FROM import_batches")
-cur.execute("DELETE FROM returns")
+# Soft-clean tables for test: mark existing rows as deleted so analytics ignore them
+cur.execute("UPDATE sale_batch_allocations SET deleted=1 WHERE (deleted IS NULL OR deleted = 0)")
+cur.execute("UPDATE import_batches SET deleted=1 WHERE (deleted IS NULL OR deleted = 0)")
+cur.execute("UPDATE returns SET deleted=1 WHERE (deleted IS NULL OR deleted = 0)")
 conn.commit()
 
 # Insert an import batch

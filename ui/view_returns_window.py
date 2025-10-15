@@ -7,7 +7,8 @@ import sys
 import subprocess
 from .theme import stripe_treeview, maximize_window, apply_theme, themed_button
 
-from db.db import list_returns as db_list_returns, update_return as db_update_return, delete_return as db_delete_return
+import db.db as db
+from db.db import list_returns as db_list_returns, update_return as db_update_return, delete_return as db_delete_return, undelete_return as db_undelete_return
 
 # Columns from DB (read-only ones are disabled in edit).
 DB_COLS = ['id', 'return_date', 'product_id', 'sale_date', 'category', 'subcategory', 'unit_price', 'selling_price', 'platform', 'refund_amount', 'refund_currency', 'refund_amount_base', 'restock', 'reason', 'doc_paths']
@@ -95,7 +96,21 @@ def open_view_returns_window(root):
         tree.heading(c, text=c, command=lambda cc=c: sort_by_column(cc))
 
     totals_var = tk.StringVar(value='')
+    show_deleted_var = tk.BooleanVar(value=False)
     ttk.Label(win, textvariable=totals_var, anchor='w').pack(fill='x', padx=8, pady=4)
+
+    def _fetch_returns(include_deleted=False):
+        if include_deleted:
+            try:
+                conn = db.get_conn()
+                cur = conn.cursor()
+                cur.execute('SELECT id, return_date, product_id, sale_date, category, subcategory, unit_price, selling_price, platform, refund_amount, refund_currency, refund_amount_base, restock, reason, doc_paths, restock_processed, deleted FROM returns ORDER BY id DESC')
+                rows = [dict(r) for r in cur.fetchall()]
+                conn.close()
+                return rows
+            except Exception:
+                return []
+        return db_list_returns()
 
     def row_matches(r, q):
         if not q:
@@ -140,7 +155,7 @@ def open_view_returns_window(root):
         count = 0
         total_refund = 0.0
         last_rows.clear()
-        for row in db_list_returns():
+        for row in _fetch_returns(show_deleted_var.get()):
             # Convert sqlite Row to dict if needed
             rowd = dict(row) if not isinstance(row, dict) else row
             if row_matches(rowd, search_var.get().strip()):
@@ -193,6 +208,28 @@ def open_view_returns_window(root):
     def refresh():
         populate()
 
+    def do_undelete():
+        sel = tree.selection()
+        if not sel:
+            messagebox.showwarning('Select', 'Select at least one row first')
+            return
+        count = len(sel)
+        if not messagebox.askyesno('Confirm', f'Undelete {count} selected returns?'):
+            return
+        any_done = False
+        for iid in sel:
+            try:
+                rid = int(iid)
+            except Exception:
+                continue
+            try:
+                if db_undelete_return(rid):
+                    any_done = True
+            except Exception:
+                continue
+        if any_done:
+            refresh()
+
     def get_selected_index():
         sel = tree.selection()
         if not sel:
@@ -203,18 +240,31 @@ def open_view_returns_window(root):
             return None
 
     def do_delete():
-        iid = get_selected_index()
-        if iid is None:
-            messagebox.showwarning('Select', 'Select a row first')
+        sel = tree.selection()
+        if not sel:
+            messagebox.showwarning('Select', 'Select at least one row first')
             return
-        if not messagebox.askyesno('Confirm', 'Delete selected return?'):
+        count = len(sel)
+        if count == 1:
+            prompt = 'Delete the selected return?'
+        else:
+            prompt = f'Delete {count} selected returns?'
+        if not messagebox.askyesno('Confirm', prompt):
             return
-        try:
-            rid = int(iid)
-        except Exception:
-            messagebox.showerror('Error', 'Invalid selection', parent=win)
-            return
-        if db_delete_return(rid):
+
+        any_deleted = False
+        for iid in sel:
+            try:
+                rid = int(iid)
+            except Exception:
+                continue
+            try:
+                if db_delete_return(rid):
+                    any_deleted = True
+            except Exception:
+                # continue deleting others even if one fails
+                continue
+        if any_deleted:
             refresh()
 
     def do_edit():

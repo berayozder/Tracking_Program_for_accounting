@@ -13,7 +13,7 @@ SALES_CSV = Path(__file__).resolve().parents[1] / 'data' / 'sales.csv'
 RETURNS_CSV = Path(__file__).resolve().parents[1] / 'data' / 'returns.csv'
 
 
-def read_sales():
+def read_sales(include_deleted: bool = False):
     if not SALES_CSV.exists():
         return []
     with SALES_CSV.open('r', newline='') as f:
@@ -44,11 +44,20 @@ def read_sales():
             for r in rows:
                 if 'SaleCurrency' not in r or not r.get('SaleCurrency'):
                     r['SaleCurrency'] = _def_ccy
-        return rows
+        # Filter out soft-deleted rows if the CSV contains a Deleted column
+        filtered = []
+        for r in rows:
+            try:
+                if not include_deleted and str(r.get('Deleted', '')).strip() in ('1', 'true', 'True'):
+                    continue
+            except Exception:
+                pass
+            filtered.append(r)
+        return filtered
 
 
 # Include SaleCurrency to capture the currency in which the sale occurred.
-DESIRED_COLS = ['Date', 'Category', 'Subcategory', 'Quantity', 'UnitPrice', 'SellingPrice', 'Platform', 'ProductID', 'CustomerID', 'DocumentPath', 'FXToBase', 'SellingPriceBase', 'SaleCurrency']
+DESIRED_COLS = ['Date', 'Category', 'Subcategory', 'Quantity', 'UnitPrice', 'SellingPrice', 'Platform', 'ProductID', 'CustomerID', 'DocumentPath', 'FXToBase', 'SellingPriceBase', 'SaleCurrency', 'Deleted']
 
 
 def write_sales(rows):
@@ -68,7 +77,10 @@ def write_sales(rows):
                     r['SaleCurrency'] = _get_def_sale_ccy()
                 except Exception:
                     r['SaleCurrency'] = ''
-            w.writerow({c: r.get(c, '') for c in DESIRED_COLS})
+            out = {c: r.get(c, '') for c in DESIRED_COLS}
+            if 'Deleted' not in out:
+                out['Deleted'] = r.get('Deleted', '')
+            w.writerow(out)
 
 
 def ensure_returns_csv():
@@ -302,6 +314,14 @@ def open_view_sales_window(root):
     selected_var = tk.StringVar(value='Selected: 0')
     ttk.Label(totals_frame, textvariable=selected_var).pack(side='right')
 
+    # Show deleted toggle
+    show_deleted_var = tk.BooleanVar(value=False)
+    try:
+        cb = ttk.Checkbutton(totals_frame, text='Show deleted', variable=show_deleted_var, command=lambda: refresh())
+        cb.pack(side='right', padx=(8, 0))
+    except Exception:
+        pass
+
     # Helper to extract 2-digit year prefixes present in data
     def compute_year_options(all_rows):
         years = set()
@@ -489,7 +509,7 @@ def open_view_sales_window(root):
     populate_tree(rows, 'All', '')
 
     def refresh():
-        new_rows = read_sales()
+        new_rows = read_sales(include_deleted=show_deleted_var.get())
         # Refresh year options (in case new prefixes were added)
         vals = compute_year_options(new_rows)
         year_combo['values'] = vals
@@ -527,15 +547,46 @@ def open_view_sales_window(root):
     tree.bind('<<TreeviewSelect>>', _update_selected_badge)
 
     def do_delete():
-        idx = get_selected_index()
-        if idx is None:
-            messagebox.showwarning('Select', 'Select a row first')
+        sel = tree.selection()
+        if not sel:
+            messagebox.showwarning('Select', 'Select at least one row first')
             return
-        if not messagebox.askyesno('Confirm', 'Delete selected sale?'):
+        count = len(sel)
+        if count == 1:
+            prompt = 'Delete the selected sale?'
+        else:
+            prompt = f'Delete {count} selected sales?'
+        if not messagebox.askyesno('Confirm', prompt):
             return
+
+        # Read current rows and mark selected ones as Deleted (soft-delete)
         rows = read_sales()
-        if 0 <= idx < len(rows):
-            del rows[idx]
+        # iids were set to original list index when populating; convert to ints where possible
+        idxs = []
+        for iid in sel:
+            try:
+                idxs.append(int(iid))
+            except Exception:
+                # If iid isn't an int, try to locate by matching ProductID in values
+                try:
+                    vals = tree.item(iid).get('values', ())
+                    pid_idx = cols.index('ProductID') if 'ProductID' in cols else 0
+                    pidv = vals[pid_idx] if pid_idx < len(vals) else None
+                    found = next((i for i, r in enumerate(rows) if str(r.get('ProductID','')) == str(pidv)), None)
+                    if found is not None:
+                        idxs.append(found)
+                except Exception:
+                    pass
+
+        changed = False
+        for i in set(idxs):
+            if 0 <= i < len(rows):
+                try:
+                    rows[i]['Deleted'] = '1'
+                    changed = True
+                except Exception:
+                    pass
+        if changed:
             write_sales(rows)
             refresh()
 
@@ -995,7 +1046,8 @@ def open_view_sales_window(root):
         """Show detailed batch allocation information for a sale."""
         dlg = tk.Toplevel(win)
         dlg.title(f'🔍 Batch Info: {product_id}')
-        dlg.geometry('800x400')
+        # Slightly larger default size for comfortable viewing
+        dlg.geometry('920x520')
         dlg.resizable(True, True)
         dlg.transient(win)
         dlg.grab_set()
@@ -1065,6 +1117,11 @@ def open_view_sales_window(root):
             
             tree.pack(side='left', fill='both', expand=True)
             scrollbar.pack(side='right', fill='y')
+            # Ensure the tree gets focus so the Close button isn't highlighted on open
+            try:
+                tree.focus_set()
+            except Exception:
+                pass
         
         # Close button
         themed_button(container, text='Close', variant='secondary', command=dlg.destroy).pack(pady=(12, 0))
@@ -1077,6 +1134,42 @@ def open_view_sales_window(root):
               command=do_mark_returned).pack(side=tk.LEFT, padx=(8, 4))
     themed_button(secondary_frame, text='🗑️ Delete', variant='danger',
               command=do_delete).pack(side=tk.LEFT, padx=4)
+    def do_undelete():
+        sel = tree.selection()
+        if not sel:
+            messagebox.showwarning('Select', 'Select at least one row first')
+            return
+        # iids correspond to CSV row indices where possible
+        idxs = []
+        for iid in sel:
+            try:
+                idxs.append(int(iid))
+            except Exception:
+                # try to map via ProductID fallback
+                try:
+                    vals = tree.item(iid).get('values', ())
+                    pid_idx = cols.index('ProductID') if 'ProductID' in cols else 0
+                    pidv = vals[pid_idx] if pid_idx < len(vals) else None
+                    # find matching row index in full file
+                    all_rows = read_sales(include_deleted=True)
+                    found = next((i for i, r in enumerate(all_rows) if str(r.get('ProductID','')) == str(pidv)), None)
+                    if found is not None:
+                        idxs.append(found)
+                except Exception:
+                    pass
+        if not idxs:
+            messagebox.showinfo('Nothing', 'No matching rows to undelete')
+            return
+        try:
+            import db.db as db
+            # db.undelete_sales_by_indices expects a list of indices
+            db.undelete_sales_by_indices(idxs)
+            refresh()
+        except Exception as e:
+            messagebox.showerror('Error', f'Failed to undelete: {e}')
+
+    themed_button(secondary_frame, text='♻️ Undelete', variant='primary',
+              command=do_undelete).pack(side=tk.LEFT, padx=4)
     
     btn_frame.pack(fill='x', pady=8)
 
