@@ -173,6 +173,16 @@ def init_db():
         currency TEXT DEFAULT 'TRY'
     )
     ''')
+    # Add columns to imports for import-level expenses and flag to include them
+    try:
+        cur.execute('PRAGMA table_info(imports)')
+        imp_cols = [r['name'] for r in cur.fetchall()]
+        if 'total_import_expenses' not in imp_cols:
+            cur.execute('ALTER TABLE imports ADD COLUMN total_import_expenses REAL DEFAULT 0.0')
+        if 'include_expenses' not in imp_cols:
+            cur.execute('ALTER TABLE imports ADD COLUMN include_expenses INTEGER DEFAULT 0')
+    except Exception:
+        pass
     # import_lines: supports multiple category/subcategory lines per import/order
     cur.execute('''
     CREATE TABLE IF NOT EXISTS import_lines (
@@ -609,7 +619,7 @@ def float_or_none(v):
         return None
 
 
-def add_import(date, ordered_price, quantity, supplier, notes, category, subcategory, currency: str = 'TRY', fx_override: float = None, lines: list = None):
+def add_import(date, ordered_price, quantity, supplier, notes, category, subcategory, currency: str = 'TRY', fx_override: float = None, lines: list = None, total_import_expenses: float = 0.0, include_expenses: bool = False):
     """
     Adds an import/order. Backwards compatible: if `lines` is None, will create a single import and line using category/subcategory.
     If `lines` is provided, it should be a list of dicts: [{'category':..., 'subcategory':..., 'ordered_price':..., 'quantity':...}, ...]
@@ -658,6 +668,14 @@ def add_import(date, ordered_price, quantity, supplier, notes, category, subcate
 
     # If lines provided, create import_lines and batches for each line
     if lines and isinstance(lines, list) and len(lines) > 0:
+        # If the user requested to include total import expenses, compute proportional shares
+        total_order_value = 0.0
+        if include_expenses:
+            for ln in lines:
+                try:
+                    total_order_value += float(ln.get('ordered_price') or 0.0) * float(ln.get('quantity') or 0.0)
+                except Exception:
+                    pass
         for ln in lines:
             ln_cat = ln.get('category')
             ln_sub = ln.get('subcategory')
@@ -670,12 +688,29 @@ def add_import(date, ordered_price, quantity, supplier, notes, category, subcate
                         (import_id, ln_cat, ln_sub or '', ln_price, ln_qty))
             import_line_id = cur.lastrowid
             conn.commit()
-            unit_cost_ccy, unit_cost_base, fx_to_base = _compute_cost_base(date, ln_price, cur_ccy, fx_override)
+            # Adjust unit price by proportional share of total_import_expenses if requested
+            adjusted_price = ln_price
+            if include_expenses and total_order_value and float(total_import_expenses or 0.0) != 0.0:
+                try:
+                    share = (ln_price * ln_qty) / total_order_value
+                    extra_per_unit = (float(total_import_expenses) * share) / float(ln_qty)
+                    adjusted_price = float(ln_price) + float(extra_per_unit)
+                except Exception:
+                    adjusted_price = ln_price
+            unit_cost_ccy, unit_cost_base, fx_to_base = _compute_cost_base(date, adjusted_price, cur_ccy, fx_override)
             create_import_batch(import_id, date, ln_cat, ln_sub, ln_qty, unit_cost_ccy, supplier, notes, cur_ccy, fx_to_base, unit_cost_base, unit_cost_base, import_line_id=import_line_id)
             update_inventory(ln_cat, ln_sub, ln_qty, conn)
     else:
         # Backward-compatible single-line import
-        unit_cost_ccy, unit_cost_base, fx_to_base = _compute_cost_base(date, ordered_price, cur_ccy, fx_override)
+        # If single-line and include_expenses requested, apply proportional logic (trivial here)
+        adjusted_price = ordered_price
+        if include_expenses and float(total_import_expenses or 0.0) != 0.0:
+            try:
+                # Only one line: add all expenses divided by quantity
+                adjusted_price = float(ordered_price) + (float(total_import_expenses) / float(quantity))
+            except Exception:
+                adjusted_price = ordered_price
+        unit_cost_ccy, unit_cost_base, fx_to_base = _compute_cost_base(date, adjusted_price, cur_ccy, fx_override)
         # create a line for legacy single entry
         cur.execute('''INSERT INTO import_lines (import_id, category, subcategory, ordered_price, quantity) VALUES (?,?,?,?,?)''',
                     (import_id, category, subcategory or '', ordered_price, quantity))
@@ -683,6 +718,15 @@ def add_import(date, ordered_price, quantity, supplier, notes, category, subcate
         conn.commit()
         create_import_batch(import_id, date, category, subcategory, quantity, unit_cost_ccy, supplier, notes, cur_ccy, fx_to_base, unit_cost_base, unit_cost_base, import_line_id=import_line_id)
         update_inventory(category, subcategory, quantity, conn)
+    # Persist total_import_expenses and include_expenses at import level
+    try:
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute('UPDATE imports SET total_import_expenses=?, include_expenses=? WHERE id=?', (float(total_import_expenses or 0.0), 1 if include_expenses else 0, import_id))
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
     conn.close()
     write_audit('add', 'import', str(import_id), f"qty={quantity}; price={ordered_price}")
 
@@ -723,7 +767,7 @@ def get_imports_with_lines(limit=500):
     return out
 
 
-def edit_import(import_id, date, ordered_price, quantity, supplier, notes, category, subcategory, currency: str = None, fx_override: float = None):
+def edit_import(import_id, date, ordered_price, quantity, supplier, notes, category, subcategory, currency: str = None, fx_override: float = None, total_import_expenses: float = 0.0, include_expenses: bool = False):
     conn = get_conn()
     cur = conn.cursor()
     supplier_name = (supplier or '').strip()
@@ -770,6 +814,15 @@ def edit_import(import_id, date, ordered_price, quantity, supplier, notes, categ
                    WHERE import_id=?''',
                          (date, category, subcategory, unit_cost_in_import_ccy, unit_cost_in_base, supplier, notes, quantity, quantity, new_currency, unit_cost_in_base, fx_to_base, import_id))
     conn.commit()
+    # Update import-level expense flags if provided
+    try:
+        cur.execute('PRAGMA table_info(imports)')
+        cols = [r['name'] for r in cur.fetchall()]
+        if 'total_import_expenses' in cols:
+            cur.execute('UPDATE imports SET total_import_expenses=?, include_expenses=? WHERE id=?', (float(total_import_expenses or 0.0), 1 if include_expenses else 0, import_id))
+            conn.commit()
+    except Exception:
+        pass
     rebuild_inventory_from_imports(conn)
     conn.close()
     write_audit('edit', 'import', str(import_id), f"qty=={quantity}; price={ordered_price}")

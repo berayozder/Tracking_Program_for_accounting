@@ -115,6 +115,14 @@ def open_imports_window(root):
     fx_entry = tk.Entry(window, width=20)
     fx_entry.pack(pady=(0,6))
 
+    # Import-level expenses (customs, shipping) and include flag
+    ttk.Label(window, text="Total import expenses (same currency):").pack(pady=(8,2))
+    import_expenses_entry = tk.Entry(window, width=20)
+    import_expenses_entry.insert(0, '0')
+    import_expenses_entry.pack(pady=(0,6))
+    include_expenses_var = tk.BooleanVar(value=False)
+    ttk.Checkbutton(window, text='Include import expenses in unit cost (proportional)', variable=include_expenses_var).pack()
+
     def fetch_and_show_fx(event=None):
         d = date_entry.get().strip()
         c = (currency_var.get() or '').strip().upper()
@@ -488,10 +496,16 @@ def open_imports_window(root):
                 except Exception:
                     continue
 
+            # read import expenses and flag
+            try:
+                tie = float(import_expenses_entry.get().strip() or 0.0)
+            except Exception:
+                tie = 0.0
+            ie_flag = bool(include_expenses_var.get())
             if lines:
-                db.add_import(row_date, price, qty, supplier, notes, '', '', cur, fx_override_val, lines=lines)
+                db.add_import(row_date, price, qty, supplier, notes, '', '', cur, fx_override_val, lines=lines, total_import_expenses=tie, include_expenses=ie_flag)
             else:
-                db.add_import(row_date, price, qty, supplier, notes, category, subcategory, cur, fx_override_val)
+                db.add_import(row_date, price, qty, supplier, notes, category, subcategory, cur, fx_override_val, total_import_expenses=tie, include_expenses=ie_flag)
         except Exception as e:
             messagebox.showerror("Error", f"Failed to save import: {e}")
             return
