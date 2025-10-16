@@ -47,6 +47,23 @@ def get_setting(key: str, default: Optional[str] = None) -> Optional[str]:
         return default
 
 
+def set_setting(key: str, value: Optional[str]) -> None:
+    """Persist a simple key/value app setting into the settings table.
+
+    Uses INSERT OR REPLACE so callers can set or update values safely.
+    """
+    try:
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute('INSERT OR REPLACE INTO settings(key, value) VALUES (?, ?)', (key, None if value is None else str(value)))
+        conn.commit()
+        conn.close()
+    except Exception:
+        # Silent failure is acceptable for non-critical settings, but callers
+        # should handle missing persistence if needed.
+        pass
+
+
 def get_base_currency() -> str:
     return (get_setting('base_currency', 'USD') or 'USD').upper()
 
@@ -807,13 +824,10 @@ def edit_import(import_id, date, ordered_price, quantity, supplier, notes, categ
                 fx_to_base = float(unit_cost_in_base) / float(unit_cost_in_import_ccy) if unit_cost_in_import_ccy != 0 else None
         except Exception:
             fx_to_base = None
-    cur.execute('''UPDATE import_batches 
-                   SET batch_date=?, category=?, subcategory=?, unit_cost=?, unit_cost_base=?, supplier=?, batch_notes=?, 
-                       original_quantity=?, remaining_quantity=remaining_quantity+(?)-(original_quantity),
-                             currency=?, unit_cost_orig=?, fx_to_base=?
-                   WHERE import_id=?''',
-                         (date, category, subcategory, unit_cost_in_import_ccy, unit_cost_in_base, supplier, notes, quantity, quantity, new_currency, unit_cost_in_base, fx_to_base, import_id))
-    conn.commit()
+    # Do not bulk-overwrite import_batches here. Batch unit_costs are per-line and
+    # should be recomputed via recompute_import_batches which uses import_lines and
+    # linked expenses. Removing the bulk update prevents the last-edited line from
+    # overwriting other lines' costs.
     # Update import-level expense flags if provided
     try:
         cur.execute('PRAGMA table_info(imports)')
@@ -843,50 +857,118 @@ def recompute_import_batches(import_id: int):
     """
     conn = get_conn()
     cur = conn.cursor()
-    # Load import-level expense settings
+    # Load import-level expense settings and currency/date
     cur.execute('SELECT total_import_expenses, include_expenses, currency, date FROM imports WHERE id=?', (import_id,))
     imp = cur.fetchone()
     if not imp:
         conn.close()
         return
-    total_expenses = float(imp['total_import_expenses'] or 0.0)
-    include_flag = int(imp['include_expenses'] or 0)
-    imp_currency = imp['currency'] if 'currency' in imp.keys() else get_default_import_currency()
-    imp_date = imp['date'] if 'date' in imp.keys() else None
+    # sqlite3.Row doesn't implement .get, so convert to dict for uniform access
+    try:
+        imp = dict(imp)
+    except Exception:
+        pass
+    try:
+        include_flag = bool(int(imp.get('include_expenses') or 0))
+    except Exception:
+        include_flag = False
+    imp_currency = (imp.get('currency') or get_default_import_currency() or 'USD').upper()
+    imp_date = imp.get('date') or None
 
-    # Load lines for this import
+    # Sum linked expenses converted into import currency (imp_currency)
+    total_expenses = 0.0
+    try:
+        cur.execute('''SELECT e.id, e.date, e.amount, e.currency, COALESCE(e.deleted,0) as deleted FROM expenses e
+                       JOIN expense_import_links l ON l.expense_id = e.id WHERE l.import_id = ?''', (import_id,))
+        exp_rows = [dict(r) for r in cur.fetchall()]
+        linked_sum_imp_ccy = 0.0
+        for er in exp_rows:
+            try:
+                if int(er.get('deleted', 0) or 0) == 1:
+                    continue
+                raw_amt = float_or_none(er.get('amount')) or 0.0
+                exp_ccy = (er.get('currency') or '').upper() or imp_currency
+                exp_date = er.get('date') or imp_date
+                if exp_ccy and imp_currency and exp_ccy != imp_currency:
+                    conv = convert_amount(exp_date, raw_amt, exp_ccy, imp_currency)
+                    if conv is None:
+                        amt_imp = raw_amt
+                    else:
+                        amt_imp = float(conv)
+                else:
+                    amt_imp = raw_amt
+                linked_sum_imp_ccy += amt_imp
+            except Exception:
+                continue
+        if linked_sum_imp_ccy and linked_sum_imp_ccy > 0:
+            total_expenses = float(linked_sum_imp_ccy)
+        else:
+            # fallback to import-level stored value (assumed in import currency)
+            try:
+                total_expenses = float(imp.get('total_import_expenses') or 0.0)
+            except Exception:
+                total_expenses = 0.0
+    except Exception:
+        try:
+            total_expenses = float(imp.get('total_import_expenses') or 0.0)
+        except Exception:
+            total_expenses = 0.0
+
+    # Load import lines for this import
     cur.execute('SELECT id, category, subcategory, ordered_price, quantity FROM import_lines WHERE import_id=?', (import_id,))
     lines = [dict(r) for r in cur.fetchall()]
     if not lines:
         conn.close()
         return
 
-    # Compute total order value (in import currency)
+    # Compute line totals and total_order_value (unit_price * qty) in import currency
     total_order_value = 0.0
-    for l in lines:
-        try:
-            total_order_value += float(l.get('ordered_price') or 0.0) * float(l.get('quantity') or 0.0)
-        except Exception:
-            pass
-
-    # For each line, compute adjusted unit price and update corresponding batch(es)
+    sanitized_lines = []
     for l in lines:
         lid = l.get('id')
-        cat = l.get('category')
-        sub = l.get('subcategory')
-        price = float_or_none(l.get('ordered_price')) or 0.0
-        qty = float_or_none(l.get('quantity')) or 0.0
-        adjusted_price = price
-        if include_flag and total_order_value and total_expenses:
-            try:
-                share = (price * qty) / total_order_value
+        try:
+            unit_price = float_or_none(l.get('ordered_price'))
+            qty = float_or_none(l.get('quantity'))
+            if unit_price is None:
+                unit_price = 0.0
+            if qty is None:
+                qty = 0.0
+            line_total = float(unit_price) * float(qty)
+            total_order_value += line_total
+            sanitized_lines.append({'id': lid, 'category': l.get('category'), 'subcategory': l.get('subcategory'), 'unit_price': float(unit_price), 'qty': float(qty), 'line_total': line_total})
+        except Exception as ex:
+            print(f"[recompute] skipping malformed line {lid}: {ex}")
+            continue
+
+    # debug prints removed
+
+    # Decide whether to apply allocation: honor include_flag but also apply if there are linked/stored expenses
+    apply_allocation = bool(include_flag)
+    if not apply_allocation and total_expenses and total_expenses > 0:
+        apply_allocation = True
+
+    # If total_order_value is zero, we cannot proportionally allocate; abort updates but still report
+    if apply_allocation and total_expenses and total_order_value <= 0:
+        print(f"[recompute] Cannot allocate expenses: total_order_value={total_order_value}")
+
+    # For each sanitized line compute adjusted unit price using per-unit proportional allocation based on line_total
+    # extra_per_unit = (line_total / total_order_value) * total_expenses / qty
+    for ln in sanitized_lines:
+        lid = ln['id']
+        unit_price = float(ln.get('unit_price') or 0.0)
+        qty = float(ln.get('qty') or 0.0)
+        line_total = float(ln.get('line_total') or 0.0)
+        adjusted_price = unit_price
+        try:
+            if apply_allocation and total_expenses and total_order_value > 0 and qty > 0:
+                share = line_total / float(total_order_value)
                 extra_per_unit = (float(total_expenses) * share) / float(qty)
-                adjusted_price = float(price) + float(extra_per_unit)
-            except Exception:
-                adjusted_price = price
-        # Compute base amounts using stored currency and optional fx
+                adjusted_price = float(unit_price) + float(extra_per_unit)
+        except Exception:
+            adjusted_price = unit_price
+
+        # Compute base conversion for adjusted price
         unit_cost_ccy = adjusted_price
-        # Recompute fx and base conversion
         base_ccy = get_base_currency()
         unit_cost_base = unit_cost_ccy
         try:
@@ -896,19 +978,26 @@ def recompute_import_batches(import_id: int):
                     unit_cost_base = float(conv)
         except Exception:
             pass
-        # Update import_batches rows linked to this import_line_id (or any batch for this import and matching category/subcategory)
+
+        # Update matching batches (prefer import_line_id then fallback to category/subcategory)
         try:
-            # Prefer direct link via import_line_id
             cur.execute('SELECT id FROM import_batches WHERE import_line_id=? AND import_id=?', (lid, import_id))
             bids = [r['id'] for r in cur.fetchall()]
             if not bids:
-                # fallback: update batches matching category/subcategory
-                cur.execute('SELECT id FROM import_batches WHERE import_id=? AND category=? AND subcategory=?', (import_id, cat, sub))
+                cur.execute('SELECT id FROM import_batches WHERE import_id=? AND category=? AND subcategory=?', (import_id, ln.get('category'), ln.get('subcategory')))
                 bids = [r['id'] for r in cur.fetchall()]
+            if not bids:
+                pass
+            # Update any found batches
             for bid in bids:
-                cur.execute('UPDATE import_batches SET unit_cost=?, unit_cost_base=? WHERE id=?', (unit_cost_ccy, unit_cost_base, bid))
+                try:
+                    # Preserve original import unit price in unit_cost_orig if not already set.
+                    cur.execute('UPDATE import_batches SET unit_cost=?, unit_cost_base=?, unit_cost_orig = COALESCE(unit_cost_orig, ?) WHERE id=?', (unit_cost_ccy, unit_cost_base, unit_price, bid))
+                except Exception:
+                    pass
         except Exception:
             pass
+
     conn.commit()
     conn.close()
 
@@ -1025,6 +1114,17 @@ def add_expense(date, amount, is_import_related=False, import_id=None, category=
     conn.commit()
     conn.close()
     write_audit('add', 'expense', str(expense_id), f"amount={amount}")
+    # Trigger recompute for each linked import so batch costs reflect this expense
+    try:
+        if ids:
+            for iid in ids:
+                try:
+                    recompute_import_batches(int(iid))
+                except Exception:
+                    # Don't let recompute failures block expense creation
+                    pass
+    except Exception:
+        pass
 
 
 def get_expenses(limit=500):
@@ -1071,6 +1171,16 @@ def edit_expense(expense_id, date, amount, is_import_related=False, import_id=No
     conn.commit()
     conn.close()
     write_audit('edit', 'expense', str(expense_id), f"amount={amount}")
+    # Trigger recompute for each linked import so batch costs reflect this edited expense
+    try:
+        if ids:
+            for iid in ids:
+                try:
+                    recompute_import_batches(int(iid))
+                except Exception:
+                    pass
+    except Exception:
+        pass
 
 
 def get_expense_import_links(expense_id):
@@ -1443,9 +1553,9 @@ def get_batch_utilization_report():
             ib.supplier,
             ib.original_quantity,
             ib.remaining_quantity,
-                COALESCE(ib.unit_cost_base, ib.unit_cost, 0) AS unit_cost,
+                COALESCE(ib.unit_cost_orig, ib.unit_cost_base, ib.unit_cost, 0) AS unit_cost,
             ib.original_quantity - ib.remaining_quantity as allocated_quantity,
-            ROUND((ib.original_quantity - ib.remaining_quantity) * COALESCE(ib.unit_cost_base, ib.unit_cost), 2) as total_cost_allocated,
+            ROUND((ib.original_quantity - ib.remaining_quantity) * COALESCE(ib.unit_cost_orig, ib.unit_cost_base, ib.unit_cost), 2) as total_cost_allocated,
             COALESCE(SUM(sba.quantity_from_batch * sba.unit_sale_price), 0) as total_revenue,
             COALESCE(SUM(sba.quantity_from_batch * sba.profit_per_unit), 0) as total_profit
         FROM import_batches ib
@@ -1621,35 +1731,16 @@ def get_batch_utilization_report_inclusive(include_expenses: bool = False):
     ''')
     rows_raw = [dict(r) for r in cur.fetchall()]
     conn.close()
-    if not include_expenses:
-        out = []
-        for r in rows_raw:
-            total_cost_allocated = float(r['allocated_quantity']) * float(r['unit_cost'])
-            out.append({
-                'id': r['id'],
-                'batch_date': r['batch_date'],
-                'category': r['category'],
-                'subcategory': r['subcategory'],
-                'supplier': r['supplier'],
-                'original_quantity': float(r['original_quantity']),
-                'remaining_quantity': float(r['remaining_quantity']),
-                'unit_cost': float(r['unit_cost']),
-                'allocated_quantity': float(r['allocated_quantity']),
-                'total_cost_allocated': round(total_cost_allocated, 2),
-                'total_revenue': float(r['total_revenue'] or 0.0),
-                'total_profit': float(r['total_profit_unadj'] or 0.0),
-            })
-        return out
-    per_imp = _build_import_expense_per_unit_map()
+    # For inclusive view we want to present payment-weighted unit costs. Those are
+    # computed and stored in import_batches.unit_cost by recompute_import_batches.
+    # If include_expenses is False the caller should use `get_batch_utilization_report`
+    # which prefers `unit_cost_orig`. Here we simply expose the stored unit_cost
+    # (which should be the adjusted price when recompute has been run for that import).
     out = []
     for r in rows_raw:
-        imp_id = r.get('import_id')
-        extra = float(per_imp.get(imp_id, 0.0))
-        unit_cost_eff = float(r['unit_cost']) + extra
+        unit_cost = float(r['unit_cost'] or 0.0)
         allocated_qty = float(r['allocated_quantity'] or 0.0)
-        total_cost_allocated = allocated_qty * unit_cost_eff
-        profit_unadj = float(r['total_profit_unadj'] or 0.0)
-        profit_adj = profit_unadj - (allocated_qty * extra)
+        total_cost_allocated = allocated_qty * unit_cost
         out.append({
             'id': r['id'],
             'batch_date': r['batch_date'],
@@ -1658,11 +1749,11 @@ def get_batch_utilization_report_inclusive(include_expenses: bool = False):
             'supplier': r['supplier'],
             'original_quantity': float(r['original_quantity']),
             'remaining_quantity': float(r['remaining_quantity']),
-            'unit_cost': unit_cost_eff,
+            'unit_cost': unit_cost,
             'allocated_quantity': allocated_qty,
             'total_cost_allocated': round(total_cost_allocated, 2),
             'total_revenue': float(r['total_revenue'] or 0.0),
-            'total_profit': round(profit_adj, 2),
+            'total_profit': float(r['total_profit_unadj'] or 0.0),
         })
     return out
 
@@ -1670,20 +1761,30 @@ def get_batch_utilization_report_inclusive(include_expenses: bool = False):
 def get_profit_analysis_by_sale(include_expenses: bool = False):
     conn = get_conn()
     cur = conn.cursor()
+    # Compute aggregated sale profit. For include_expenses=True we prefer the
+    # adjusted unit_cost stored in import_batches.unit_cost (payment-weighted).
+    # For include_expenses=False prefer the original import price stored in
+    # import_batches.unit_cost_orig (fallbacking to unit_cost_base/unit_cost).
     if not include_expenses:
-        cur.execute('''
+        # Non-inclusive: prefer original import price stored on batch, then fall back
+        # to base/unit_cost and finally any recorded allocation cost.
+        cost_expr = "COALESCE(ib.unit_cost_orig, ib.unit_cost_base, ib.unit_cost, NULLIF(sba.unit_cost,0), 0)"
+    else:
+        # Inclusive: prefer adjusted batch unit_cost (payment-weighted), then fallbacks.
+        cost_expr = "COALESCE(ib.unit_cost, ib.unit_cost_base, ib.unit_cost_orig, NULLIF(sba.unit_cost,0), 0)"
+    cur.execute(f'''
             SELECT 
                 sba.product_id,
                 sba.sale_date,
                 sba.category,
                 sba.subcategory,
                 SUM(sba.quantity_from_batch) as total_quantity,
-                ROUND(SUM(sba.quantity_from_batch * COALESCE(NULLIF(sba.unit_cost,0), ib.unit_cost_base, ib.unit_cost_orig, ib.unit_cost, 0)), 2) as total_cost,
+                ROUND(SUM(sba.quantity_from_batch * {cost_expr}), 2) as total_cost,
                 ROUND(SUM(sba.quantity_from_batch * sba.unit_sale_price), 2) as total_revenue,
-                ROUND(SUM(sba.quantity_from_batch * (sba.unit_sale_price - COALESCE(NULLIF(sba.unit_cost,0), ib.unit_cost_base, ib.unit_cost_orig, ib.unit_cost, 0))), 2) as total_profit,
+                ROUND(SUM(sba.quantity_from_batch * (sba.unit_sale_price - {cost_expr})), 2) as total_profit,
                 ROUND(
-                    SUM(sba.quantity_from_batch * (sba.unit_sale_price - COALESCE(NULLIF(sba.unit_cost,0), ib.unit_cost_base, ib.unit_cost_orig, ib.unit_cost, 0))) 
-                    / NULLIF(SUM(sba.quantity_from_batch * COALESCE(NULLIF(sba.unit_cost,0), ib.unit_cost_base, ib.unit_cost_orig, ib.unit_cost, 0)), 0) * 100
+                    SUM(sba.quantity_from_batch * (sba.unit_sale_price - {cost_expr})) 
+                    / NULLIF(SUM(sba.quantity_from_batch * {cost_expr}), 0) * 100
                 , 2) as profit_margin_percent,
                 COUNT(DISTINCT sba.batch_id) as batches_used
             FROM sale_batch_allocations sba
@@ -1696,9 +1797,15 @@ def get_profit_analysis_by_sale(include_expenses: bool = False):
     conn.close()
 
     # Fetch detailed allocations using a fresh connection (avoid closed cursor)
+    # Use the same cost selection logic as the aggregate query so detailed
+    # allocation costs reflect the include_expenses flag consistently.
+    if not include_expenses:
+        cost_expr_alloc = "COALESCE(ib.unit_cost_orig, ib.unit_cost_base, ib.unit_cost, NULLIF(sba.unit_cost,0), 0)"
+    else:
+        cost_expr_alloc = "COALESCE(ib.unit_cost, ib.unit_cost_base, ib.unit_cost_orig, NULLIF(sba.unit_cost,0), 0)"
     conn_a = get_conn()
     cur_a = conn_a.cursor()
-    cur_a.execute('''
+    cur_a.execute(f'''
         SELECT 
             sba.product_id,
             sba.sale_date,
@@ -1706,7 +1813,7 @@ def get_profit_analysis_by_sale(include_expenses: bool = False):
             sba.subcategory,
             sba.quantity_from_batch,
             sba.unit_sale_price,
-            COALESCE(NULLIF(sba.unit_cost,0), ib.unit_cost_base, ib.unit_cost_orig, ib.unit_cost, 0) AS unit_cost,
+            {cost_expr_alloc} AS unit_cost,
             ib.import_id
         FROM sale_batch_allocations sba
         LEFT JOIN import_batches ib ON sba.batch_id = ib.id
@@ -1715,7 +1822,6 @@ def get_profit_analysis_by_sale(include_expenses: bool = False):
     ''')
     allocs = [dict(r) for r in cur_a.fetchall()]
     conn_a.close()
-    per_imp = _build_import_expense_per_unit_map()
     agg: Dict[str, Dict[str, float]] = {}
     sale_date: Dict[str, str] = {}
     category_map: Dict[str, str] = {}
@@ -1727,9 +1833,7 @@ def get_profit_analysis_by_sale(include_expenses: bool = False):
         q = float(a['quantity_from_batch'] or 0.0)
         unit_sale = float(a['unit_sale_price'] or 0.0)
         unit_cost = float(a['unit_cost'] or 0.0)
-        imp_id = a.get('import_id')
-        extra = float(per_imp.get(imp_id, 0.0)) if imp_id is not None else 0.0
-        eff_cost = unit_cost + extra
+        eff_cost = unit_cost
         d = agg.setdefault(pid, {'qty': 0.0, 'cost': 0.0, 'rev': 0.0})
         d['qty'] += q
         d['cost'] += q * eff_cost

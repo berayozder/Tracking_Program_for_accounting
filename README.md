@@ -319,6 +319,39 @@ This comprehensive functionality guide covers every feature, interaction, and ca
 - Numeric validation for prices and quantities
 - Category code consistency enforcement
 
+#### Import expenses & multi-line import orders
+
+We recently introduced a richer import model to support multi-line import orders and a centralized expense system. Key points:
+
+- Multi-line import orders
+  - Each import can contain one or more import lines (for different SKUs, quantities, or unit prices). These are stored in the `import_lines` table and linked to the parent `imports` row.
+  - Each import line has an original ordered unit price and quantity which are the canonical base values used for allocation and reporting.
+
+- Expense linking
+  - Expenses can be linked to one or more imports using `expense_import_links`. Link one expense to multiple imports (or leave an expense unlinked).
+  - Expenses are stored in their original currency and converted to the import's currency (by transaction date) during allocation.
+
+- Payment-weighted expense allocation (how extra cost is apportioned)
+  - For each import, the app computes a `line_total = ordered_unit_price * quantity` for every import line, then `total_order_value = sum(line_total)`.
+  - Each line's share of total expenses is its line_total / total_order_value.
+  - The extra expense per unit for a line = (line_share * total_expenses) / quantity.
+  - Final per-unit cost = original_unit_price + extra_expense_per_unit.
+  - This is implemented in `db/recompute_import_batches(import_id)` and runs automatically when linked expenses change.
+
+- Cost columns and semantics
+  - `unit_cost_orig` — the original import unit price (preserved for historical, non-inclusive reporting).
+  - `unit_cost` — the expense-inclusive unit cost after allocation (used for "include import-related expenses" reporting).
+  - `unit_cost_base` — the `unit_cost` converted to the configured base currency using the import FX at time of import.
+
+- Reporting behavior
+  - Batch analytics and profit reports have a toggle: "Include import-related expenses".
+  - Non-inclusive reports use `unit_cost_orig` (original import price); inclusive reports use `unit_cost`.
+  - This keeps non-inclusive historical reporting reproducible while giving an option to see expense-adjusted margins.
+
+- Backfill and historical sales
+  - We do NOT automatically overwrite historical `sale_batch_allocations` by default. If you want historical sales to reflect the new inclusive costs, we can provide an optional backfill script that updates `sale_batch_allocations.unit_cost` from `import_batches.unit_cost`. This is deliberate — changing past reported COGS can affect audits and reporting consistency.
+  - If you need a backfill, specify the policy (all allocations, allocations since a date, or only unfinalized allocations) and we will add an idempotent migration script and optional audit logging.
+
 ### 💰 Sales Processing
 **Smart Sales Recording:**
 - **Inventory Integration**: Categories populated from current stock
@@ -413,11 +446,6 @@ db.reset_all_tables(clear_product_codes=False)  # Keep codes
 # or
 db.delete_database_file()  # Complete reset
 ```
-
-### Data & Currency Migrations
-- Allocation unit cost zero bug fixed; historical allocations have been backfilled and profit/unit recomputed where needed
-- Sales CSV header migrated to `SellingPriceBase`; the app still reads `SellingPriceUSD` for older files
-
 
 ## 📝 Development
 

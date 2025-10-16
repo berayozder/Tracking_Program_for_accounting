@@ -30,8 +30,30 @@ def open_imports_window(root):
     except Exception:
         pass
 
-    tk.Label(window, text="Date (YYYY-MM-DD):").pack(pady=5)
-    date_entry = tk.Entry(window, width=25)
+    # Use a scrollable canvas for the form so bottom buttons remain visible
+    content_outer = ttk.Frame(window)
+    content_outer.pack(fill='both', expand=True)
+
+    canvas = tk.Canvas(content_outer)
+    canvas.pack(side='left', fill='both', expand=True)
+    vsb = ttk.Scrollbar(content_outer, orient='vertical', command=canvas.yview)
+    vsb.pack(side='right', fill='y')
+    canvas.configure(yscrollcommand=vsb.set)
+
+    content_frame = ttk.Frame(canvas)
+    # Put content_frame into canvas
+    canvas.create_window((0,0), window=content_frame, anchor='nw')
+
+    def _on_frame_configure(event=None):
+        try:
+            canvas.configure(scrollregion=canvas.bbox('all'))
+        except Exception:
+            pass
+
+    content_frame.bind('<Configure>', _on_frame_configure)
+
+    tk.Label(content_frame, text="Date (YYYY-MM-DD):").pack(pady=5)
+    date_entry = tk.Entry(content_frame, width=25)
     date_entry.insert(0, datetime.now().strftime('%Y-%m-%d'))
     date_entry.pack(pady=5)
 
@@ -45,8 +67,8 @@ def open_imports_window(root):
     subcategory_entry.pack(pady=5)
 
     # --- Multi-line support: a small list of lines for this import/order ---
-    ttk.Label(window, text="Order lines (optional, add multiple category/subcategory lines):").pack(pady=(8,4))
-    lines_frame = ttk.Frame(window)
+    ttk.Label(content_frame, text="Order lines (optional, add multiple category/subcategory lines):").pack(pady=(8,4))
+    lines_frame = ttk.Frame(content_frame)
     lines_frame.pack(fill='x', padx=8)
     lines_tree = ttk.Treeview(lines_frame, columns=('category','subcategory','qty','price'), show='headings', height=4)
     for c in ('category','subcategory','qty','price'):
@@ -57,7 +79,7 @@ def open_imports_window(root):
     lines_tree.configure(yscrollcommand=lines_scroll.set)
     lines_scroll.pack(side='right', fill='y')
 
-    line_buttons = ttk.Frame(window)
+    line_buttons = ttk.Frame(content_frame)
     line_buttons.pack(fill='x', padx=8, pady=(4,8))
 
     def add_line():
@@ -90,8 +112,8 @@ def open_imports_window(root):
 
     # Product name and id removed per user request
 
-    tk.Label(window, text="Ordered Price (per unit):").pack(pady=5)
-    price_entry = tk.Entry(window, width=20)
+    tk.Label(content_frame, text="Ordered Price (per unit):").pack(pady=5)
+    price_entry = tk.Entry(content_frame, width=20)
     price_entry.pack(pady=5)
 
     # Currency selection with default from settings
@@ -100,28 +122,23 @@ def open_imports_window(root):
         _default_ccy = _db.get_default_import_currency()
     except Exception:
         _default_ccy = 'USD'
-    ttk.Label(window, text="Currency:").pack(pady=4)
+    ttk.Label(content_frame, text="Currency:").pack(pady=4)
     currency_var = tk.StringVar(value=_default_ccy)
     cur_cb = ttk.Combobox(window, values=['USD','TRY','EUR','GBP'], textvariable=currency_var, state='readonly', width=10)
     cur_cb.pack(pady=(0,6))
 
     # Suggested FX (fetched) + manual override
-    ttk.Label(window, text="Suggested FX (to base currency):").pack(pady=(6,2))
+    ttk.Label(content_frame, text="Suggested FX (to base currency):").pack(pady=(6,2))
     suggested_fx_var = tk.StringVar(value='')
-    suggested_fx_label = ttk.Label(window, textvariable=suggested_fx_var)
+    suggested_fx_label = ttk.Label(content_frame, textvariable=suggested_fx_var)
     suggested_fx_label.pack()
 
-    ttk.Label(window, text="Override FX (leave empty to accept suggested):").pack(pady=(6,2))
-    fx_entry = tk.Entry(window, width=20)
+    ttk.Label(content_frame, text="Override FX (leave empty to accept suggested):").pack(pady=(6,2))
+    fx_entry = tk.Entry(content_frame, width=20)
     fx_entry.pack(pady=(0,6))
 
-    # Import-level expenses (customs, shipping) and include flag
-    ttk.Label(window, text="Total import expenses (same currency):").pack(pady=(8,2))
-    import_expenses_entry = tk.Entry(window, width=20)
-    import_expenses_entry.insert(0, '0')
-    import_expenses_entry.pack(pady=(0,6))
-    include_expenses_var = tk.BooleanVar(value=False)
-    ttk.Checkbutton(window, text='Include import expenses in unit cost (proportional)', variable=include_expenses_var).pack()
+    # Note: import-level expenses are captured via the Expenses screen now;
+    # they are not requested on the Record Import window.
 
     def fetch_and_show_fx(event=None):
         d = date_entry.get().strip()
@@ -143,12 +160,12 @@ def open_imports_window(root):
     date_entry.bind('<FocusOut>', fetch_and_show_fx)
     cur_cb.bind('<<ComboboxSelected>>', fetch_and_show_fx)
 
-    tk.Label(window, text="Quantity: ").pack(pady=5)
-    qty_entry = tk.Entry(window, width=20)
+    tk.Label(content_frame, text="Quantity: ").pack(pady=5)
+    qty_entry = tk.Entry(content_frame, width=20)
     qty_entry.pack(pady=5)
 
-    tk.Label(window, text="Supplier (optional): ").pack(pady=5)
-    supplier_entry = tk.Entry(window, width=40)
+    tk.Label(content_frame, text="Supplier (optional): ").pack(pady=5)
+    supplier_entry = tk.Entry(content_frame, width=40)
     supplier_entry.pack(pady=5)
 
     # --- Supplier suggestions dropdown (like category/subcategory) ---
@@ -246,8 +263,8 @@ def open_imports_window(root):
     # Hide dropdown when focus leaves supplier entry
     supplier_entry.bind('<FocusOut>', lambda e: _destroy_supplier_dropdown())
 
-    tk.Label(window, text="Notes: ").pack(pady=5)
-    notes_entry = tk.Entry(window, width=40)
+    tk.Label(content_frame, text="Notes: ").pack(pady=5)
+    notes_entry = tk.Entry(content_frame, width=40)
     notes_entry.pack(pady=5)
 
     # --- Suggestion dropdown placeholders ---
@@ -496,16 +513,11 @@ def open_imports_window(root):
                 except Exception:
                     continue
 
-            # read import expenses and flag
-            try:
-                tie = float(import_expenses_entry.get().strip() or 0.0)
-            except Exception:
-                tie = 0.0
-            ie_flag = bool(include_expenses_var.get())
+            # Expenses are handled separately via the Expenses window; do not collect here.
             if lines:
-                db.add_import(row_date, price, qty, supplier, notes, '', '', cur, fx_override_val, lines=lines, total_import_expenses=tie, include_expenses=ie_flag)
+                db.add_import(row_date, price, qty, supplier, notes, '', '', cur, fx_override_val, lines=lines)
             else:
-                db.add_import(row_date, price, qty, supplier, notes, category, subcategory, cur, fx_override_val, total_import_expenses=tie, include_expenses=ie_flag)
+                db.add_import(row_date, price, qty, supplier, notes, category, subcategory, cur, fx_override_val)
         except Exception as e:
             messagebox.showerror("Error", f"Failed to save import: {e}")
             return
@@ -513,7 +525,11 @@ def open_imports_window(root):
         messagebox.showinfo("Saved", "Import saved.")
         window.destroy()
 
-    themed_button(window, text="Save Import", variant='primary', command=save_import).pack(pady=15)
+    # Bottom action bar with fixed Save/Cancel buttons
+    action_bar = ttk.Frame(window, padding=8)
+    action_bar.pack(side='bottom', fill='x')
+    themed_button(action_bar, text="Cancel", variant='secondary', command=window.destroy).pack(side='left')
+    themed_button(action_bar, text="Save Import", variant='primary', command=save_import).pack(side='right')
 
 
 def update_inventory(category, subcategory, quantity):

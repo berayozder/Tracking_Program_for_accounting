@@ -461,7 +461,7 @@ def open_view_sales_window(root):
                     pass
                 # Insert row and apply tag for returned
                 tag = 'returned' if is_returned else ''
-                tree.insert('', tk.END, iid=str(idx), values=vals, tags=(tag,))
+                tree.insert('', 0, iid=str(idx), values=vals, tags=(tag,))
                 shown += 1
                 # Only count non-returned sales in totals
                 if not is_returned:
