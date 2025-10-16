@@ -278,8 +278,8 @@ def open_imports_window(root):
         try:
             rows = db.get_imports(limit=10000)
             for r in rows:
-                c = (r.get('category') or '').strip()
-                s = (r.get('subcategory') or '').strip()
+                c = str(r.get('category') or '').strip()
+                s = str(r.get('subcategory') or '').strip()
                 if c:
                     cats.add(c)
                 if s:
@@ -442,8 +442,8 @@ def open_imports_window(root):
             for iid in lines_tree.get_children():
                 vals = lines_tree.item(iid).get('values', ())
                 try:
-                    ln_cat = vals[0]
-                    ln_sub = vals[1]
+                    ln_cat = str(vals[0]) if vals and len(vals) > 0 else ''
+                    ln_sub = str(vals[1]) if vals and len(vals) > 1 else ''
                     ln_qty = float(vals[2])
                     ln_price = float(vals[3])
                     lines.append({'category': ln_cat, 'subcategory': ln_sub, 'ordered_price': ln_price, 'quantity': ln_qty})
@@ -456,7 +456,7 @@ def open_imports_window(root):
                 pairs = []
                 seen = set()
                 for l in lines:
-                    key = ( (l.get('category') or '').strip(), (l.get('subcategory') or '').strip() )
+                    key = ( str(l.get('category') or '').strip(), str(l.get('subcategory') or '').strip() )
                     if key not in seen:
                         seen.add(key)
                         pairs.append(key)
