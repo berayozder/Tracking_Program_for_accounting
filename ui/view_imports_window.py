@@ -128,16 +128,32 @@ def open_view_imports_window(root):
             tree.delete(r)
         total_qty = 0.0
         total_cost_usd = 0.0
-        for row in _fetch_imports(show_deleted_var.get()):
+        # Collect rows that match search, then sort newest->oldest for display
+        fetched = list(_fetch_imports(show_deleted_var.get()))
+        shown_rows = []
+        for row in fetched:
             if row_matches(row, search_var.get().strip()):
-                tree.insert('', 0, values=[row.get(c, '') for c in cols])
+                shown_rows.append(row)
+        # Sort by numeric id if available, otherwise by date string (YYYY-MM-DD) — newest first
+        def _sort_key(r):
+            try:
+                return int(r.get('id'))
+            except Exception:
                 try:
-                    q = float(row.get('quantity') or 0)
-                    p = float(row.get('ordered_price') or 0)
-                    total_qty += q
-                    total_cost_usd += q * p
+                    return r.get('date') or ''
                 except Exception:
-                    pass
+                    return ''
+        shown_rows.sort(key=_sort_key, reverse=True)
+
+        for row in shown_rows:
+            tree.insert('', 'end', values=[row.get(c, '') for c in cols])
+            try:
+                q = float(row.get('quantity') or 0)
+                p = float(row.get('ordered_price') or 0)
+                total_qty += q
+                total_cost_usd += q * p
+            except Exception:
+                pass
         totals_var.set(f"Rows: {len(tree.get_children())}    Total Qty: {total_qty:.2f}    Total Cost (USD): {total_cost_usd:.2f}")
         try:
             stripe_treeview(tree)
@@ -345,7 +361,7 @@ def open_view_imports_window(root):
                 tree_l.column(c, width=120, anchor=tk.CENTER)
             tree_l.pack(expand=True, fill='both', padx=8, pady=8)
             for ln in target.get('lines', []):
-                tree_l.insert('', 'end', values=(ln.get('id'), ln.get('category'), ln.get('subcategory'), ln.get('quantity'), ln.get('ordered_price')))
+                tree_l.insert('', 0, values=(ln.get('id'), ln.get('category'), ln.get('subcategory'), ln.get('quantity'), ln.get('ordered_price')))
             themed_button(d, text='Close', variant='secondary', command=d.destroy).pack(pady=6)
         except Exception as e:
             messagebox.showerror('Error', f'Failed to load lines: {e}')

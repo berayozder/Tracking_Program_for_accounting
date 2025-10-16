@@ -95,7 +95,15 @@ def open_imports_window(root):
         except Exception:
             messagebox.showerror('Invalid', 'Price and Quantity must be numbers.')
             return
-        lines_tree.insert('', 'end', values=(c, s, q, p))
+        # Insert the validated line at top so newest lines appear first
+        try:
+            lines_tree.insert('', 0, values=(c, s, q, p))
+        except Exception:
+            # fallback to append if insert at 0 fails for some themes
+            try:
+                lines_tree.insert('', 'end', values=(c, s, q, p))
+            except Exception:
+                pass
 
     def remove_line():
         sel = lines_tree.selection()

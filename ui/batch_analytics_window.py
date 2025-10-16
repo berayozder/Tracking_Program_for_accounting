@@ -279,7 +279,7 @@ def open_batch_analytics_window(root):
                     f"${float(batch.get('total_profit') or 0):.2f}"
                 ]
                 
-                item_id = batch_tree.insert('', 'end', values=values)
+                item_id = batch_tree.insert('', 0, values=values)
                 
                 # Color code based on utilization
                 if batch['remaining_quantity'] <= 0:
@@ -316,7 +316,7 @@ def open_batch_analytics_window(root):
                     sale['batches_used']
                 ]
                 
-                item_id = profit_tree.insert('', 'end', values=values)
+                item_id = profit_tree.insert('', 0, values=values)
                 
                 # Color code based on profit margin
                 if sale['total_profit'] < 0:
@@ -335,7 +335,7 @@ def open_batch_analytics_window(root):
             detail_tree.delete(item)
         
         if not allocations:
-            detail_tree.insert('', 'end', values=[
+            detail_tree.insert('', 0, values=[
                 product_id, 'N/A', 'N/A', 'N/A', 'N/A', 
                 'No allocations found', 'N/A', 'N/A', 'N/A', 'N/A'
             ])
@@ -357,7 +357,7 @@ def open_batch_analytics_window(root):
                 f"${float(total_profit or 0):.2f}"
             ]
             
-            item_id = detail_tree.insert('', 'end', values=values)
+            item_id = detail_tree.insert('', 0, values=values)
             
             # Color code shortages
             if alloc.get('batch_id') is None:
@@ -375,22 +375,19 @@ def open_batch_analytics_window(root):
             # Get all sales with batch allocation data
             sales = db.get_profit_analysis_by_sale()
             
-            # Load sales data with customer IDs
-            from pathlib import Path
-            import csv
-            SALES_CSV = Path(__file__).resolve().parents[2] / 'data' / 'sales.csv'
-            
+            # Load sales data with customer IDs from DB (preferred)
             sales_by_customer = {}
-            if SALES_CSV.exists():
-                with SALES_CSV.open('r', newline='') as f:
-                    reader = csv.DictReader(f)
-                    for row in reader:
-                        customer_id = row.get('CustomerID', '').strip()
-                        product_id = row.get('ProductID', '').strip()
-                        if customer_id and product_id:
-                            if customer_id not in sales_by_customer:
-                                sales_by_customer[customer_id] = []
-                            sales_by_customer[customer_id].append(row)
+            try:
+                all_sales = db.list_sales()
+                for s in all_sales:
+                    cust = (s.get('customer_id') or s.get('CustomerID') or '').strip()
+                    pid = (s.get('product_id') or s.get('ProductID') or '').strip()
+                    date = s.get('date') or s.get('Date') or ''
+                    if cust and pid:
+                        sales_by_customer.setdefault(cust, []).append({'ProductID': pid, 'Date': date})
+            except Exception:
+                # DB access failed or no sales available; continue with empty customer-sales mapping
+                sales_by_customer = {}
             
             # Combine customer data with sales analytics
             for customer in customers:
@@ -432,7 +429,7 @@ def open_batch_analytics_window(root):
                     last_sale_date
                 ]
                 
-                item_id = customer_tree.insert('', 'end', values=values)
+                item_id = customer_tree.insert('', 0, values=values)
                 
                 # Color code based on customer value
                 if total_sales == 0:
@@ -448,7 +445,7 @@ def open_batch_analytics_window(root):
     def refresh_all_data():
         """Refresh all analytics data."""
         try:
-            # First ensure existing imports are migrated to batches
+            # First ensure existing imports are converted to batches
             migrated_count = db.migrate_existing_imports_to_batches()
             # Silent migration; removed console print
             # Backfill any missing unit costs in historical allocations

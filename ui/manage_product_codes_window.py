@@ -107,7 +107,7 @@ def open_manage_product_codes_window(root):
     def add_or_edit(existing=None):
         dlg = tk.Toplevel(win)
         dlg.title('Edit Codes' if existing else 'Add Codes')
-        dlg.geometry('420x320')
+        dlg.geometry('550x400')
 
         entries = {}
 

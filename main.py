@@ -1,4 +1,4 @@
-"""Root application entry (migrated from legacy py.main)."""
+"""Root application entry."""
 import tkinter as tk
 from tkinter import ttk, messagebox
 

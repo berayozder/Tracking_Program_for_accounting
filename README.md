@@ -49,7 +49,6 @@ On first launch you’ll be prompted to create an admin user.
 
 ## Data locations
 - Database: `data/app.db`
-- CSVs (legacy/interop): `data/sales.csv`, `data/returns.csv`, etc.
 - Documents: stored as file paths; opened with the OS default app
 
 ## Core concepts
@@ -229,7 +228,7 @@ Notes:
   - users (login), audit_log (history)
   - import_batches (batches) and sale_batch_allocations (sales-to-batch links)
 - **CSV (data/)**
-  - sales.csv, returns.csv
+  - returns.csv
   - customers.csv (optional), suppliers.csv (optional)
 
 This hybrid model keeps analytics consistent and still allows lightweight CSV exports.
@@ -290,9 +289,9 @@ CSV compatibility:
 - **expenses**: Business costs with optional import linking and documents
 - **product_codes**: Category/subcategory code mappings and serial management
 
-**CSV Files:**
-- **sales.csv**: Individual item records with generated product IDs
-- **returns.csv**: Return processing records with restock information
+**CSV Files (legacy historical note):**
+- Sales data: Historically stored in CSV files; sales are now persisted in the `sales` table in `data/app.db`.
+- **returns.csv**: Return processing records with restock information (legacy)
 
 #### **🔄 Data Synchronization**
 **Automatic Updates:**
@@ -412,7 +411,6 @@ We recently introduced a richer import model to support multi-line import orders
 - `import_batches`, `sale_batch_allocations` (FIFO cost tracking)
 
 **CSV Files:**
-- `data/sales.csv` (sales records, product IDs)
 - `data/returns.csv` (returns with restock & refund info)
 - `data/customers.csv`, `data/suppliers.csv` (optional linkage directories)
 
@@ -421,7 +419,6 @@ We recently introduced a richer import model to support multi-line import orders
 Tracking_Program_for_accounting/
 ├── data/
 │   ├── app.db
-│   ├── sales.csv
 │   ├── returns.csv
 │   ├── customers.csv (optional)
 │   └── suppliers.csv (optional)

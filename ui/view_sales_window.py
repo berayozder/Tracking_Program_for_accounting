@@ -9,142 +9,103 @@ import subprocess
 from .theme import stripe_treeview, maximize_window, themed_button
 import core.fx_rates as fx_rates
 
-SALES_CSV = Path(__file__).resolve().parents[1] / 'data' / 'sales.csv'
-RETURNS_CSV = Path(__file__).resolve().parents[1] / 'data' / 'returns.csv'
-
-
 def read_sales(include_deleted: bool = False):
-    if not SALES_CSV.exists():
-        return []
-    with SALES_CSV.open('r', newline='') as f:
-        reader = csv.DictReader(f)
-        rows = list(reader)
-        # Backward compatibility: map SellingPriceUSD to SellingPriceBase if present
-        if rows and 'SellingPriceBase' not in reader.fieldnames and 'SellingPriceUSD' in reader.fieldnames:
-            for r in rows:
-                if 'SellingPriceBase' not in r or not r.get('SellingPriceBase'):
-                    r['SellingPriceBase'] = r.get('SellingPriceUSD', '')
-        # Normalize FX and currency columns: support legacy SaleFXToTRY and new FXToBase
-        if rows and 'FXToBase' not in reader.fieldnames:
-            for r in rows:
-                # Prefer FXToBase, fallback to SaleFXToTRY if present
-                if 'FXToBase' not in r or not r.get('FXToBase'):
-                    if 'SaleFXToTRY' in r and r.get('SaleFXToTRY'):
-                        r['FXToBase'] = r.get('SaleFXToTRY')
-                    else:
-                        r['FXToBase'] = ''
+    """Return sales as a list of CSV-like dicts.
 
-        # Inject SaleCurrency if missing
-        if rows and 'SaleCurrency' not in reader.fieldnames:
-            try:
-                from db.db import get_default_sale_currency as _get_def_sale_ccy
-                _def_ccy = _get_def_sale_ccy()
-            except Exception:
-                _def_ccy = ''
-            for r in rows:
-                if 'SaleCurrency' not in r or not r.get('SaleCurrency'):
-                    r['SaleCurrency'] = _def_ccy
-        # Filter out soft-deleted rows if the CSV contains a Deleted column
-        filtered = []
-        for r in rows:
-            try:
-                if not include_deleted and str(r.get('Deleted', '')).strip() in ('1', 'true', 'True'):
-                    continue
-            except Exception:
-                pass
-            filtered.append(r)
-        return filtered
-
-
-# Include SaleCurrency to capture the currency in which the sale occurred.
-DESIRED_COLS = ['Date', 'Category', 'Subcategory', 'Quantity', 'UnitPrice', 'SellingPrice', 'Platform', 'ProductID', 'CustomerID', 'DocumentPath', 'FXToBase', 'SellingPriceBase', 'SaleCurrency', 'Deleted']
-
-
-def write_sales(rows):
-    # Write rows with canonical columns, filling missing keys with ''
-    SALES_CSV.parent.mkdir(parents=True, exist_ok=True)
-    with SALES_CSV.open('w', newline='') as f:
-        w = csv.DictWriter(f, fieldnames=DESIRED_COLS)
-        w.writeheader()
-        for r in rows:
-            # Map legacy key if needed
-            if 'SellingPriceBase' not in r and 'SellingPriceUSD' in r:
-                r['SellingPriceBase'] = r.get('SellingPriceUSD', '')
-            # Ensure SaleCurrency present
-            if 'SaleCurrency' not in r or not r.get('SaleCurrency'):
-                try:
-                    from db.db import get_default_sale_currency as _get_def_sale_ccy
-                    r['SaleCurrency'] = _get_def_sale_ccy()
-                except Exception:
-                    r['SaleCurrency'] = ''
-            out = {c: r.get(c, '') for c in DESIRED_COLS}
-            if 'Deleted' not in out:
-                out['Deleted'] = r.get('Deleted', '')
-            w.writerow(out)
-
-
-def ensure_returns_csv():
-    RETURNS_CSV.parent.mkdir(parents=True, exist_ok=True)
-    # Include RefundCurrency to support FX-aware refunds
-    desired = ['ReturnDate', 'ProductID', 'SaleDate', 'Category', 'Subcategory', 'UnitPrice', 'SellingPrice', 'Platform', 'RefundAmount', 'RefundCurrency', 'Restock', 'Reason', 'ReturnDocPath']
-    if not RETURNS_CSV.exists():
-        with RETURNS_CSV.open('w', newline='') as f:
-            csv.writer(f).writerow(desired)
-        return
-    # Try to migrate header if missing cols (non-destructive)
-    try:
-        with RETURNS_CSV.open('r', newline='') as f:
-            reader = csv.reader(f)
-            rows = list(reader)
-        if not rows:
-            with RETURNS_CSV.open('w', newline='') as f:
-                csv.writer(f).writerow(desired)
-            return
-        header = rows[0]
-        if header == desired:
-            return
-        # map rows into desired
-        data = rows[1:]
-        mapped = []
-        for r in data:
-            rowd = {header[i]: r[i] if i < len(r) else '' for i in range(len(header))}
-            mapped.append({
-                'ReturnDate': rowd.get('ReturnDate', ''),
-                'ProductID': rowd.get('ProductID', ''),
-                'SaleDate': rowd.get('SaleDate', ''),
-                'Category': rowd.get('Category', ''),
-                'Subcategory': rowd.get('Subcategory', ''),
-                'UnitPrice': rowd.get('UnitPrice', ''),
-                'SellingPrice': rowd.get('SellingPrice', ''),
-                'Platform': rowd.get('Platform', ''),
-                'RefundAmount': rowd.get('RefundAmount', ''),
-                'RefundCurrency': rowd.get('RefundCurrency', ''),
-                'Restock': rowd.get('Restock', ''),
-                'Reason': rowd.get('Reason', ''),
-                'ReturnDocPath': rowd.get('ReturnDocPath', ''),
-            })
-        with RETURNS_CSV.open('w', newline='') as f:
-            w = csv.DictWriter(f, fieldnames=desired)
-            w.writeheader()
-            w.writerows(mapped)
-    except Exception:
-        pass
-
-
-def read_returns():
-    # Prefer DB for returns to reflect real-time state; fallback to CSV only if needed
+    Prefer DB-backed `list_sales()` if available; CSV fallback only when DB is unavailable.
+    The returned dicts keep the same keys used elsewhere in the UI (Date, Category, Subcategory, Quantity,
+    SellingPrice, Platform, ProductID, CustomerID, DocumentPath, FXToBase, SellingPriceBase, SaleCurrency, Deleted).
+    """
+    # Try DB first for up-to-date data
     try:
         import db.db as db
-        rows = db.list_returns()
-        # Map to a CSV-like dict for compatibility where used
+        rows = db.list_sales(include_deleted=include_deleted)  # type: ignore[attr-defined]
         out = []
         for r in rows:
             try:
-                # sqlite3.Row doesn't implement .get, so convert to dict safely
                 if hasattr(r, 'keys'):
                     rr = {k: r[k] for k in r.keys()}
                 else:
                     rr = dict(r)
+            except Exception:
+                rr = dict(r) if isinstance(r, dict) else {}
+
+            # Map DB keys into CSV-like keys expected by the UI
+            mapped = {
+                'Date': rr.get('date') or rr.get('Date') or '',
+                'Category': rr.get('category') or rr.get('Category') or '',
+                'Subcategory': rr.get('subcategory') or rr.get('Subcategory') or '',
+                'Quantity': rr.get('quantity') or rr.get('Quantity') or '',
+                'SellingPrice': rr.get('selling_price') or rr.get('SellingPrice') or rr.get('unit_price') or '',
+                'Platform': rr.get('platform') or rr.get('Platform') or '',
+                'ProductID': rr.get('product_id') or rr.get('ProductID') or '',
+                'CustomerID': rr.get('customer_id') or rr.get('CustomerID') or '',
+                'DocumentPath': rr.get('document_path') or rr.get('doc_paths') or rr.get('DocumentPath') or '',
+                'FXToBase': rr.get('fx_to_base') or rr.get('FXToBase') or rr.get('SaleFXToTRY') or '',
+                'SellingPriceBase': rr.get('selling_price_base') or rr.get('SellingPriceBase') or rr.get('SellingPriceUSD') or '',
+                'SaleCurrency': (rr.get('sale_currency') or rr.get('SaleCurrency') or '')
+            }
+            # Preserve deleted flag if available
+            try:
+                deleted_val = rr.get('deleted')
+                if deleted_val is None:
+                    deleted_val = rr.get('Deleted')
+                mapped['Deleted'] = '1' if str(deleted_val) in ('1', 'True', 'true') else ''
+            except Exception:
+                mapped['Deleted'] = ''
+            out.append(mapped)
+        return out
+    except Exception:
+        # No CSV fallback: this app is DB-first. If DB access fails, return empty list.
+        return []
+
+
+# Include SaleCurrency to capture the currency in which the sale occurred.
+DESIRED_COLS = ['Date', 'Category', 'Subcategory', 'Quantity', 'SellingPrice', 'Platform', 'ProductID', 'CustomerID', 'DocumentPath', 'FXToBase', 'SellingPriceBase', 'SaleCurrency', 'Deleted']
+
+
+def write_sales(rows):
+    # Prefer DB-backed overwrite when available
+    try:
+        import db.db as db
+        # Convert CSV-like rows into DB column naming (snake_case)
+        db_rows = []
+        for r in rows:
+            rr = dict(r or {})
+            # Map common fields
+            db_rows.append({
+                'date': rr.get('Date', ''),
+                'category': rr.get('Category', ''),
+                'subcategory': rr.get('Subcategory', ''),
+                'quantity': rr.get('Quantity', ''),
+                'selling_price': rr.get('SellingPrice', '') or rr.get('unit_price', ''),
+                'platform': rr.get('Platform', ''),
+                'product_id': rr.get('ProductID', ''),
+                'customer_id': rr.get('CustomerID', ''),
+                'document_path': rr.get('DocumentPath', '') or rr.get('doc_paths', ''),
+                'fx_to_base': rr.get('FXToBase', ''),
+                'selling_price_base': rr.get('SellingPriceBase', '') or rr.get('SellingPriceUSD', ''),
+                'sale_currency': (rr.get('SaleCurrency') or '')
+            })
+        db.overwrite_sales(db_rows)  # type: ignore[attr-defined]
+        return
+    except Exception as e:
+        # Fail fast in DB-only mode: surface the error to the caller.
+        raise
+
+
+def read_returns():
+    """Return returns as a list of dicts (DB-only).
+
+    Uses DB helper `list_returns()` exclusively. If DB access fails, returns an empty list.
+    """
+    try:
+        import db.db as db
+        rows = db.list_returns()
+        out = []
+        for r in rows:
+            try:
+                rr = {k: r[k] for k in r.keys()} if hasattr(r, 'keys') else dict(r)
             except Exception:
                 rr = {}
             out.append({
@@ -153,7 +114,6 @@ def read_returns():
                 'SaleDate': rr.get('sale_date',''),
                 'Category': rr.get('category',''),
                 'Subcategory': rr.get('subcategory',''),
-                'UnitPrice': rr.get('unit_price',''),
                 'SellingPrice': rr.get('selling_price',''),
                 'Platform': rr.get('platform',''),
                 'RefundAmount': rr.get('refund_amount',''),
@@ -164,11 +124,7 @@ def read_returns():
             })
         return out
     except Exception:
-        # Legacy fallback
-        ensure_returns_csv()
-        with RETURNS_CSV.open('r', newline='') as f:
-            reader = csv.DictReader(f)
-            return list(reader)
+        return []
 
 
 def open_view_sales_window(root):
@@ -214,7 +170,6 @@ def open_view_sales_window(root):
     search_entry = ttk.Entry(filter_row1, textvariable=search_var, width=25, font=('', 9))
     search_entry.pack(side=tk.LEFT)
 
-    ensure_returns_csv()
     cols = DESIRED_COLS
     
     # Table container
@@ -229,7 +184,6 @@ def open_view_sales_window(root):
         'Category': {'width': 120, 'anchor': 'w'},
         'Subcategory': {'width': 120, 'anchor': 'w'},
         'Quantity': {'width': 70, 'anchor': 'center'},
-        'UnitPrice': {'width': 80, 'anchor': 'e'},
         'SellingPrice': {'width': 90, 'anchor': 'e'},
     'SaleCurrency': {'width': 80, 'anchor': 'center'},
     'FXToBase': {'width': 120, 'anchor': 'e'},
@@ -353,7 +307,7 @@ def open_view_sales_window(root):
             return True
         ql = q.lower()
         # Search in common fields
-        fields = ['Date', 'Category', 'Subcategory', 'Platform', 'ProductID', 'UnitPrice', 'SellingPrice']
+        fields = ['Date', 'Category', 'Subcategory', 'Platform', 'ProductID', 'SellingPrice']
         for f in fields:
             v = str(r.get(f, '')).lower()
             if ql in v:
@@ -461,7 +415,9 @@ def open_view_sales_window(root):
                     pass
                 # Insert row and apply tag for returned
                 tag = 'returned' if is_returned else ''
-                tree.insert('', 0, iid=str(idx), values=vals, tags=(tag,))
+                # If the row has an 'id' field (from DB), use it as iid so actions map to DB ids.
+                iid_val = str(r.get('id')) if r.get('id') is not None else str(idx)
+                tree.insert('', 0, iid=iid_val, values=vals, tags=(tag,))
                 shown += 1
                 # Only count non-returned sales in totals
                 if not is_returned:
@@ -559,47 +515,60 @@ def open_view_sales_window(root):
         if not messagebox.askyesno('Confirm', prompt):
             return
 
-        # Read current rows and mark selected ones as Deleted (soft-delete)
-        rows = read_sales()
-        # iids were set to original list index when populating; convert to ints where possible
-        idxs = []
+        # Gather DB ids from selection
+        ids = []
         for iid in sel:
             try:
-                idxs.append(int(iid))
+                ids.append(int(iid))
             except Exception:
-                # If iid isn't an int, try to locate by matching ProductID in values
+                # fallback: try to map via ProductID value against current rows
                 try:
                     vals = tree.item(iid).get('values', ())
                     pid_idx = cols.index('ProductID') if 'ProductID' in cols else 0
                     pidv = vals[pid_idx] if pid_idx < len(vals) else None
-                    found = next((i for i, r in enumerate(rows) if str(r.get('ProductID','')) == str(pidv)), None)
-                    if found is not None:
-                        idxs.append(found)
+                    if pidv:
+                        all_rows = read_sales(include_deleted=True)
+                        found = next((r for r in all_rows if str(r.get('ProductID','')) == str(pidv)), None)
+                        if found and found.get('id'):
+                            ids.append(int(found.get('id')))
                 except Exception:
                     pass
-
-        changed = False
-        for i in set(idxs):
-            if 0 <= i < len(rows):
-                try:
-                    rows[i]['Deleted'] = '1'
-                    changed = True
-                except Exception:
-                    pass
-        if changed:
-            write_sales(rows)
+        if not ids:
+            messagebox.showinfo('Nothing', 'No matching rows to delete')
+            return
+        try:
+            import db.db as db
+            db.mark_sale_deleted(ids)
             refresh()
+        except Exception:
+            # Fall back to CSV editing where necessary
+            rows = read_sales()
+            changed = False
+            for r in rows:
+                if str(r.get('id')) in [str(x) for x in ids] or r.get('ProductID') and str(r.get('ProductID')) in [str(x) for x in ids]:
+                    try:
+                        r['Deleted'] = '1'
+                        changed = True
+                    except Exception:
+                        pass
+            if changed:
+                write_sales(rows)
+                refresh()
 
     def do_mark_returned():
         idx = get_selected_index()
         if idx is None:
             messagebox.showwarning('Select', 'Select a row first')
             return
-        rows = read_sales()
-        if not (0 <= idx < len(rows)):
-            messagebox.showerror('Error', 'Invalid selection index')
+        try:
+            import db.db as db
+            rows = db.list_sales(include_deleted=True)
+            rec = next((r for r in rows if r.get('id') == idx), None)
+        except Exception:
+            rec = None
+        if not rec:
+            messagebox.showerror('Error', 'Invalid selection or sale not found')
             return
-        rec = rows[idx]
         # Prevent duplicate returns for same product id
         existing = { (r.get('ProductID') or '').strip() for r in read_returns() }
         pid = (rec.get('ProductID') or '').strip()
@@ -729,7 +698,7 @@ def open_view_sales_window(root):
                     'sale_date': rec.get('Date',''),
                     'category': rec.get('Category',''),
                     'subcategory': rec.get('Subcategory',''),
-                    'unit_price': rec.get('UnitPrice',''),
+                        'unit_price': rec.get('SellingPrice',''),
                     'selling_price': rec.get('SellingPrice',''),
                     'platform': rec.get('Platform',''),
                     'refund_amount': refund,
@@ -770,11 +739,15 @@ def open_view_sales_window(root):
         if idx is None:
             messagebox.showwarning('Select', 'Select a row first')
             return
-        rows = read_sales()
-        if not (0 <= idx < len(rows)):
+        try:
+            import db.db as db
+            rows = db.list_sales(include_deleted=True)
+            rec = next((r for r in rows if r.get('id') == idx), None)
+        except Exception:
+            rec = None
+        if not rec:
             messagebox.showerror('Error', 'Invalid selection index')
             return
-        rec = rows[idx]
         # Prevent editing core sale if returned
         try:
             returned = { (r.get('ProductID') or '').strip() for r in read_returns() }
@@ -804,9 +777,8 @@ def open_view_sales_window(root):
         add_field('Category:', 'Category')
         add_field('Subcategory (optional):', 'Subcategory')
         add_field('Quantity:', 'Quantity')
-        add_field('Unit Price:', 'UnitPrice')
-        # Show SellingPrice but keep disabled; it will be recomputed on save
-        add_field('Selling Price (auto):', 'SellingPrice', disabled=True)
+        # SellingPrice is stored per-unit; allow editing SellingPrice directly
+        add_field('Selling Price (per unit):', 'SellingPrice')
         add_field('Platform:', 'Platform')
         add_field('Product ID:', 'ProductID')
         add_field('Customer ID:', 'CustomerID')
@@ -851,30 +823,48 @@ def open_view_sales_window(root):
                 messagebox.showerror('Invalid quantity', 'Quantity must be a number')
                 return
             try:
-                unit = float(entries['UnitPrice'].get().strip())
+                selling_price = float(entries['SellingPrice'].get().strip())
             except Exception:
-                messagebox.showerror('Invalid unit price', 'Unit price must be a number')
+                messagebox.showerror('Invalid selling price', 'Selling price must be a number')
                 return
-            price = qty * unit
             platform = entries['Platform'].get().strip()
             pid = entries['ProductID'].get().strip()
             customer_id = entries['CustomerID'].get().strip()
             docp = entries['DocumentPath'].get().strip()
 
-            # update row and write
-            rows[idx] = {
-                'Date': d,
-                'Category': cat,
-                'Subcategory': sub,
-                'Quantity': qty,
-                'UnitPrice': unit,
-                'SellingPrice': price,
-                'Platform': platform,
-                'ProductID': pid,
-                'CustomerID': customer_id,
-                'DocumentPath': docp,
-            }
-            write_sales(rows)
+            # Persist changes via DB helper
+            try:
+                import db.db as db
+                db.update_sale(idx, {
+                    'date': d,
+                    'category': cat,
+                    'subcategory': sub,
+                    'quantity': qty,
+                    'selling_price': selling_price,
+                    'platform': platform,
+                    'product_id': pid,
+                    'customer_id': customer_id,
+                    'document_path': docp,
+                })
+            except Exception:
+                # Fallback to CSV overwrite
+                rows = read_sales()
+                try:
+                    if 0 <= idx < len(rows):
+                        rows[idx] = {
+                            'Date': d,
+                            'Category': cat,
+                            'Subcategory': sub,
+                            'Quantity': qty,
+                            'SellingPrice': selling_price,
+                            'Platform': platform,
+                            'ProductID': pid,
+                            'CustomerID': customer_id,
+                            'DocumentPath': docp,
+                        }
+                        write_sales(rows)
+                except Exception:
+                    pass
             dlg.destroy()
             refresh()
 
@@ -985,10 +975,19 @@ def open_view_sales_window(root):
                     pass
 
         def save_and_close():
-            rows2 = read_sales()
-            if 0 <= idx < len(rows2):
-                rows2[idx]['DocumentPath'] = format_docs(docs)
-                write_sales(rows2)
+            # Prefer DB update
+            try:
+                import db.db as db
+                db.update_sale(idx, {'document_path': format_docs(docs)})
+            except Exception:
+                rows2 = read_sales()
+                # fallback to index-based update for CSV
+                try:
+                    if 0 <= idx < len(rows2):
+                        rows2[idx]['DocumentPath'] = format_docs(docs)
+                        write_sales(rows2)
+                except Exception:
+                    pass
             dlg.destroy()
             refresh()
 
@@ -1028,19 +1027,25 @@ def open_view_sales_window(root):
             messagebox.showwarning('Select', 'Select a row first')
             return
         
-        rows = read_sales()
-        if 0 <= idx < len(rows):
-            product_id = rows[idx].get('ProductID', '').strip()
-            if not product_id:
-                messagebox.showwarning('No Product ID', 'This sale has no Product ID')
-                return
-            
-            try:
-                import db.db as db
-                allocations = db.get_sale_batch_info(product_id)
-                show_batch_info_dialog(product_id, allocations)
-            except Exception as e:
-                messagebox.showerror('Error', f'Failed to get batch info: {e}')
+        try:
+            import db.db as db
+            rows = db.list_sales(include_deleted=True)
+            rec = next((r for r in rows if r.get('id') == idx), None)
+        except Exception:
+            rec = None
+        if not rec:
+            messagebox.showerror('Error', 'Invalid selection or sale not found')
+            return
+        product_id = (rec.get('product_id') or rec.get('ProductID') or '').strip()
+        if not product_id:
+            messagebox.showwarning('No Product ID', 'This sale has no Product ID')
+            return
+        try:
+            import db.db as db
+            allocations = db.get_sale_batch_info(product_id)
+            show_batch_info_dialog(product_id, allocations)
+        except Exception as e:
+            messagebox.showerror('Error', f'Failed to get batch info: {e}')
     
     def show_batch_info_dialog(product_id, allocations):
         """Show detailed batch allocation information for a sale."""
@@ -1105,7 +1110,7 @@ def open_view_sales_window(root):
                     f"${float(total_item_profit or 0):.2f}"
                 ]
                 
-                item_id = tree.insert('', 'end', values=values)
+                item_id = tree.insert('', 0, values=values)
                 
                 # Highlight shortages
                 if alloc['batch_id'] is None:
@@ -1139,31 +1144,28 @@ def open_view_sales_window(root):
         if not sel:
             messagebox.showwarning('Select', 'Select at least one row first')
             return
-        # iids correspond to CSV row indices where possible
-        idxs = []
+        ids = []
         for iid in sel:
             try:
-                idxs.append(int(iid))
+                ids.append(int(iid))
             except Exception:
-                # try to map via ProductID fallback
                 try:
                     vals = tree.item(iid).get('values', ())
                     pid_idx = cols.index('ProductID') if 'ProductID' in cols else 0
                     pidv = vals[pid_idx] if pid_idx < len(vals) else None
-                    # find matching row index in full file
-                    all_rows = read_sales(include_deleted=True)
-                    found = next((i for i, r in enumerate(all_rows) if str(r.get('ProductID','')) == str(pidv)), None)
-                    if found is not None:
-                        idxs.append(found)
+                    if pidv:
+                        all_rows = read_sales(include_deleted=True)
+                        found = next((r for r in all_rows if str(r.get('ProductID','')) == str(pidv)), None)
+                        if found and found.get('id'):
+                            ids.append(int(found.get('id')))
                 except Exception:
                     pass
-        if not idxs:
+        if not ids:
             messagebox.showinfo('Nothing', 'No matching rows to undelete')
             return
         try:
             import db.db as db
-            # db.undelete_sales_by_indices expects a list of indices
-            db.undelete_sales_by_indices(idxs)
+            db.undelete_sales_by_ids(ids)
             refresh()
         except Exception as e:
             messagebox.showerror('Error', f'Failed to undelete: {e}')

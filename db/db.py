@@ -18,13 +18,7 @@ except Exception:  # pragma: no cover - fallback if module missing
 
 # Root-level data directory (db/ is one level below project root)
 DATA_DIR = Path(__file__).resolve().parents[1] / "data"
-DATA_DIR.mkdir(parents=True, exist_ok=True)
-
 DB_PATH = DATA_DIR / "app.db"
-IMPORTS_CSV = DATA_DIR / "imports.csv"
-INVENTORY_CSV = DATA_DIR / "inventory.csv"
-SUPPLIERS_CSV = DATA_DIR / "suppliers.csv"
-RETURNS_CSV = DATA_DIR / "returns.csv"
 
 
 def get_conn():
@@ -59,8 +53,7 @@ def set_setting(key: str, value: Optional[str]) -> None:
         conn.commit()
         conn.close()
     except Exception:
-        # Silent failure is acceptable for non-critical settings, but callers
-        # should handle missing persistence if needed.
+        # Silent failure is acceptable for non-critical settings
         pass
 
 
@@ -80,11 +73,8 @@ def get_default_expense_currency() -> str:
     return (get_setting('default_expense_currency', get_base_currency()) or get_base_currency()).upper()
 
 
-# ---------------- Currency conversion ----------------
+# ---------------- Currency conversion & FX cache ----------------
 def _get_rate_generic(date_str: str, from_ccy: str, to_ccy: str) -> Optional[float]:
-    """Return rate (to_ccy per 1 from_ccy) using frankfurter when possible.
-    Currently optimized for USD<->TRY flows. If same currency, return 1.0.
-    """
     from_ccy = (from_ccy or '').upper()
     to_ccy = (to_ccy or '').upper()
     if not from_ccy or not to_ccy:
@@ -96,8 +86,8 @@ def _get_rate_generic(date_str: str, from_ccy: str, to_ccy: str) -> Optional[flo
         cached = get_cached_rate(date_str, from_ccy, to_ccy)
         if cached and cached > 0:
             return cached
-        # Import placed rates assume USD base previously; reuse fx_rates for USD->TRY
-        import core.fx_rates as fx_rates  # local import to avoid circular at module load
+        # Use core.fx_rates for common USD/TRY path
+        import core.fx_rates as fx_rates
         if from_ccy == 'USD' and to_ccy == 'TRY':
             r = fx_rates.get_or_fetch_rate(date_str)
             if r and r > 0:
@@ -109,12 +99,9 @@ def _get_rate_generic(date_str: str, from_ccy: str, to_ccy: str) -> Optional[flo
             if v and v > 0:
                 set_cached_rate(date_str, from_ccy, to_ccy, v)
             return v
-        # Fallback via frankfurter direct call for other pairs
-        # Minimal inline fetch to avoid adding new dependencies
+        # Fallback: try frankfurter API
         from urllib import request
-        base = from_ccy
-        to = to_ccy
-        path = f"/{date_str}?from={base}&to={to}" if date_str else f"/latest?from={base}&to={to}"
+        path = f"/{date_str}?from={from_ccy}&to={to_ccy}" if date_str else f"/latest?from={from_ccy}&to={to_ccy}"
         for scheme in ("https", "http"):
             url = f"{scheme}://api.frankfurter.app{path}"
             try:
@@ -151,6 +138,7 @@ def get_cached_rate(date_str: str, from_ccy: str, to_ccy: str) -> Optional[float
         cur = conn.cursor()
         cur.execute('SELECT rate FROM fx_cache WHERE date=? AND from_ccy=? AND to_ccy=?', (date_str, from_ccy.upper(), to_ccy.upper()))
         row = cur.fetchone()
+        conn.close()
         return float(row['rate']) if row and row['rate'] is not None else None
     except Exception:
         return None
@@ -163,6 +151,7 @@ def set_cached_rate(date_str: str, from_ccy: str, to_ccy: str, rate: float) -> N
         cur.execute('INSERT OR REPLACE INTO fx_cache(date, from_ccy, to_ccy, rate) VALUES (?,?,?,?)',
                     (date_str, from_ccy.upper(), to_ccy.upper(), float(rate)))
         conn.commit()
+        conn.close()
     except Exception:
         pass
 
@@ -448,6 +437,27 @@ def init_db():
                 pass
     except Exception:
         pass
+    # SALES table
+    cur.execute('''
+    CREATE TABLE IF NOT EXISTS sales (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        date TEXT,
+        category TEXT,
+        subcategory TEXT,
+        quantity REAL,
+        selling_price REAL,
+        platform TEXT,
+        product_id TEXT,
+        customer_id TEXT,
+        document_path TEXT,
+        fx_to_base REAL,
+        selling_price_base REAL,
+        sale_currency TEXT,
+        deleted INTEGER DEFAULT 0
+    )
+    ''')
+    cur.execute('CREATE INDEX IF NOT EXISTS idx_sales_date ON sales(date)')
+    cur.execute('CREATE INDEX IF NOT EXISTS idx_sales_product ON sales(product_id)')
     # Triggers for product_codes integrity
     cur.execute('''
     CREATE TRIGGER IF NOT EXISTS trg_product_codes_bi
@@ -494,8 +504,9 @@ def init_db():
     END;
     ''')
     conn.commit()
-    # One-time migration: import legacy returns.csv into returns table if empty
+    # One-time migration: import returns.csv into returns table if empty
     try:
+    # CSV migration removed; only migrate returns if needed
         migrate_returns_csv_to_db()
     except Exception:
         pass
@@ -2102,75 +2113,126 @@ def migrate_existing_imports_to_batches():
     return len(unmigrated_imports)
 
 
-# ---------------- SUPPLIER MANAGEMENT (CSV) ----------------
-def ensure_suppliers_csv():
-    SUPPLIERS_CSV.parent.mkdir(parents=True, exist_ok=True)
-    desired_headers = ['supplier_id', 'name', 'email', 'phone', 'address', 'payment_terms', 'notes', 'created_date']
-    if not SUPPLIERS_CSV.exists():
-        with SUPPLIERS_CSV.open('w', newline='') as f:
-            import csv
-            csv.writer(f).writerow(desired_headers)
-        return
+# ---------------- SUPPLIER MANAGEMENT (DB-backed) ----------------
+
+def _ensure_suppliers_table():
     try:
-        with SUPPLIERS_CSV.open('r', newline='') as f:
-            import csv
-            reader = csv.reader(f)
-            rows = list(reader)
-        if not rows:
-            with SUPPLIERS_CSV.open('w', newline='') as f:
-                csv.writer(f).writerow(desired_headers)
-            return
-        header = rows[0]
-        if header == desired_headers:
-            return
-        data = rows[1:]
-        mapped = []
-        for r in data:
-            rowd = {header[i]: r[i] if i < len(r) else '' for i in range(len(header))}
-            mapped.append({
-                'supplier_id': rowd.get('supplier_id', ''),
-                'name': rowd.get('name', ''),
-                'email': rowd.get('email', ''),
-                'phone': rowd.get('phone', ''),
-                'address': rowd.get('address', ''),
-                'payment_terms': rowd.get('payment_terms', ''),
-                'notes': rowd.get('notes', ''),
-                'created_date': rowd.get('created_date', ''),
-            })
-        with SUPPLIERS_CSV.open('w', newline='') as f:
-            import csv
-            w = csv.DictWriter(f, fieldnames=desired_headers)
-            w.writeheader()
-            w.writerows(mapped)
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS suppliers (
+                supplier_id TEXT PRIMARY KEY,
+                name TEXT,
+                email TEXT,
+                phone TEXT,
+                address TEXT,
+                payment_terms TEXT,
+                notes TEXT,
+                created_date TEXT
+            )
+        ''')
+        conn.commit()
+        conn.close()
     except Exception:
-        pass
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 
-def read_suppliers():
-    ensure_suppliers_csv()
-    if not SUPPLIERS_CSV.exists():
+def ensure_suppliers_csv():
+    """No-op compatibility shim: suppliers are persisted in the DB.
+
+    Historically this created `data/suppliers.csv`. The function remains as
+    a shim for compatibility with older callers but performs no file I/O.
+    """
+    _ensure_suppliers_table()
+    return
+
+
+def read_suppliers() -> list:
+    """Return list of suppliers as dicts from the DB.
+
+    Maintains the same dict shape used by the UI code.
+    """
+    try:
+        _ensure_suppliers_table()
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute('SELECT supplier_id, name, email, phone, address, payment_terms, notes, created_date FROM suppliers ORDER BY name')
+        rows = cur.fetchall()
+        conn.close()
+        out = []
+        for r in rows:
+            out.append({
+                'supplier_id': r['supplier_id'],
+                'name': r['name'],
+                'email': r['email'],
+                'phone': r['phone'],
+                'address': r['address'],
+                'payment_terms': r['payment_terms'],
+                'notes': r['notes'],
+                'created_date': r['created_date'],
+            })
+        return out
+    except Exception:
         return []
-    with SUPPLIERS_CSV.open('r', newline='') as f:
-        import csv
-        return list(csv.DictReader(f))
 
 
-def write_suppliers(suppliers):
-    ensure_suppliers_csv()
-    with SUPPLIERS_CSV.open('w', newline='') as f:
-        import csv
-        fieldnames = ['supplier_id', 'name', 'email', 'phone', 'address', 'payment_terms', 'notes', 'created_date']
-        w = csv.DictWriter(f, fieldnames=fieldnames)
-        w.writeheader()
-        w.writerows(suppliers)
+def write_suppliers(suppliers: list) -> None:
+    """Overwrite suppliers in the DB using an upsert behavior.
+
+    The input is expected as a list of dicts with supplier fields.
+    """
+    try:
+        _ensure_suppliers_table()
+        conn = get_conn()
+        cur = conn.cursor()
+        for s in suppliers:
+            sid = (s.get('supplier_id') or '').strip()
+            if not sid:
+                continue
+            cur.execute('''
+                INSERT INTO suppliers(supplier_id, name, email, phone, address, payment_terms, notes, created_date)
+                VALUES (?,?,?,?,?,?,?,?)
+                ON CONFLICT(supplier_id) DO UPDATE SET
+                    name=excluded.name,
+                    email=excluded.email,
+                    phone=excluded.phone,
+                    address=excluded.address,
+                    payment_terms=excluded.payment_terms,
+                    notes=excluded.notes,
+                    created_date=excluded.created_date
+            ''', (
+                sid,
+                s.get('name',''),
+                s.get('email',''),
+                s.get('phone',''),
+                s.get('address',''),
+                s.get('payment_terms',''),
+                s.get('notes',''),
+                s.get('created_date',''),
+            ))
+        conn.commit()
+        conn.close()
+    except Exception:
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 
 def get_next_supplier_id():
     try:
-        suppliers = read_suppliers()
+        _ensure_suppliers_table()
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("SELECT supplier_id FROM suppliers WHERE supplier_id LIKE 'SUP%'")
+        rows = cur.fetchall()
+        conn.close()
         max_num = 0
-        for s in suppliers:
-            sid = (s.get('supplier_id', '') or '').strip()
+        for r in rows:
+            sid = (r['supplier_id'] or '').strip()
             if sid.startswith('SUP'):
                 try:
                     num = int(sid[3:])
@@ -2184,34 +2246,60 @@ def get_next_supplier_id():
 
 
 def add_supplier(name, email='', phone='', address='', payment_terms='', notes=''):
-    ensure_suppliers_csv()
-    supplier_id = get_next_supplier_id()
-    created_date = datetime.now().strftime('%Y-%m-%d')
-    with SUPPLIERS_CSV.open('a', newline='') as f:
-        import csv
-        w = csv.DictWriter(f, fieldnames=['supplier_id', 'name', 'email', 'phone', 'address', 'payment_terms', 'notes', 'created_date'])
-        w.writerow({
-            'supplier_id': supplier_id,
-            'name': (name or '').strip(),
-            'email': (email or '').strip(),
-            'phone': (phone or '').strip(),
-            'address': (address or '').strip(),
-            'payment_terms': (payment_terms or '').strip(),
-            'notes': (notes or '').strip(),
-            'created_date': created_date,
-        })
-    return supplier_id
+    try:
+        _ensure_suppliers_table()
+        supplier_id = get_next_supplier_id()
+        created_date = datetime.now().strftime('%Y-%m-%d')
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute('''
+            INSERT INTO suppliers(supplier_id, name, email, phone, address, payment_terms, notes, created_date)
+            VALUES (?,?,?,?,?,?,?,?)
+        ''', (
+            supplier_id,
+            (name or '').strip(),
+            (email or '').strip(),
+            (phone or '').strip(),
+            (address or '').strip(),
+            (payment_terms or '').strip(),
+            (notes or '').strip(),
+            created_date,
+        ))
+        conn.commit()
+        conn.close()
+        return supplier_id
+    except Exception:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        return None
 
 
 def find_supplier_by_name(name):
     if not name:
         return None
-    suppliers = read_suppliers()
-    n = name.strip().lower()
-    for s in suppliers:
-        if (s.get('name', '') or '').strip().lower() == n:
-            return s
-    return None
+    try:
+        _ensure_suppliers_table()
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute('SELECT supplier_id, name, email, phone, address, payment_terms, notes, created_date FROM suppliers WHERE LOWER(TRIM(name)) = ? LIMIT 1', (name.strip().lower(),))
+        row = cur.fetchone()
+        conn.close()
+        if not row:
+            return None
+        return {
+            'supplier_id': row['supplier_id'],
+            'name': row['name'],
+            'email': row['email'],
+            'phone': row['phone'],
+            'address': row['address'],
+            'payment_terms': row['payment_terms'],
+            'notes': row['notes'],
+            'created_date': row['created_date'],
+        }
+    except Exception:
+        return None
 
 
 def find_or_create_supplier(name):
@@ -2224,33 +2312,58 @@ def find_or_create_supplier(name):
 
 
 def edit_supplier(supplier_id, name=None, email=None, phone=None, address=None, payment_terms=None, notes=None):
-    updated = False
-    suppliers = read_suppliers()
-    for i, s in enumerate(suppliers):
-        if (s.get('supplier_id', '') or '').strip() == (supplier_id or '').strip():
-            s.update({
-                'name': (name if name is not None else s.get('name', '')),
-                'email': (email if email is not None else s.get('email', '')),
-                'phone': (phone if phone is not None else s.get('phone', '')),
-                'address': (address if address is not None else s.get('address', '')),
-                'payment_terms': (payment_terms if payment_terms is not None else s.get('payment_terms', '')),
-                'notes': (notes if notes is not None else s.get('notes', '')),
-            })
-            suppliers[i] = s
-            updated = True
-            break
-    if updated:
-        write_suppliers(suppliers)
-    return updated
+    try:
+        _ensure_suppliers_table()
+        conn = get_conn()
+        cur = conn.cursor()
+        # Build update parts
+        fields = {}
+        if name is not None:
+            fields['name'] = name
+        if email is not None:
+            fields['email'] = email
+        if phone is not None:
+            fields['phone'] = phone
+        if address is not None:
+            fields['address'] = address
+        if payment_terms is not None:
+            fields['payment_terms'] = payment_terms
+        if notes is not None:
+            fields['notes'] = notes
+        if not fields:
+            conn.close()
+            return False
+        set_clause = ', '.join([f"{k} = ?" for k in fields.keys()])
+        params = list(fields.values()) + [supplier_id]
+        cur.execute(f'UPDATE suppliers SET {set_clause} WHERE supplier_id = ?', params)
+        conn.commit()
+        updated = cur.rowcount > 0
+        conn.close()
+        return bool(updated)
+    except Exception:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        return False
 
 
 def delete_supplier(supplier_id):
-    suppliers = read_suppliers()
-    new_list = [s for s in suppliers if (s.get('supplier_id', '') or '').strip() != (supplier_id or '').strip()]
-    if len(new_list) != len(suppliers):
-        write_suppliers(new_list)
-        return True
-    return False
+    try:
+        _ensure_suppliers_table()
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute('DELETE FROM suppliers WHERE supplier_id = ?', (supplier_id,))
+        conn.commit()
+        deleted = cur.rowcount > 0
+        conn.close()
+        return bool(deleted)
+    except Exception:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        return False
 
 
 def get_supplier_purchases_summary(supplier_id):
@@ -2272,7 +2385,13 @@ def get_supplier_purchases_summary(supplier_id):
 
 def get_supplier_name_suggestions():
     try:
-        names = [(s.get('name', '') or '').strip() for s in read_suppliers()]
+        _ensure_suppliers_table()
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute('SELECT DISTINCT name FROM suppliers')
+        rows = cur.fetchall()
+        conn.close()
+        names = [ (r[0] or '').strip() for r in rows if r and r[0] ]
         return sorted({n for n in names if n})
     except Exception:
         return []
@@ -2352,60 +2471,6 @@ def get_monthly_sales_profit(year: int):
                         bucket['cogs'] -= per_unit
                     except Exception:
                         pass
-        except Exception:
-            pass
-
-        try:
-            if RETURNS_CSV.exists():
-                import csv as _csv
-                with RETURNS_CSV.open('r', newline='') as _f:
-                    rdr = _csv.DictReader(_f)
-                    for rr in rdr:
-                        try:
-                            rd = (rr.get('ReturnDate') or '').strip()
-                            ym = rd[:7] if rd else None
-                            if not ym or not (str(year) == ym[:4]):
-                                continue
-                            # If RefundCurrency provided, convert to base; else assume already base
-                            refund_amt_raw = float(rr.get('RefundAmount') or 0)
-                            refund_ccy = (rr.get('RefundCurrency') or '').strip().upper()
-                            if refund_ccy:
-                                try:
-                                    base = get_base_currency()
-                                    conv = convert_amount(rd, refund_amt_raw, refund_ccy, base)
-                                    refund_amt = float(conv or 0.0)
-                                except Exception:
-                                    refund_amt = refund_amt_raw
-                            else:
-                                refund_amt = refund_amt_raw
-                            restock = str(rr.get('Restock') or '0').strip()
-                            restock_flag = 1 if restock in ('1','true','True','YES','yes') else 0
-                            pid = rr.get('ProductID')
-                            bucket = result.setdefault(ym, {'revenue': 0.0, 'cogs': 0.0, 'gross_profit': 0.0, 'items_sold': 0.0})
-                            bucket['revenue'] -= refund_amt
-                            bucket['items_sold'] -= 1.0
-                            if restock_flag and pid:
-                                try:
-                                    conn2 = get_conn()
-                                    cur2 = conn2.cursor()
-                                    cur2.execute('''
-                                        SELECT 
-                                            SUM(COALESCE(sba.quantity_from_batch,0)) AS tq,
-                                            SUM(COALESCE(NULLIF(sba.unit_cost,0), ib.unit_cost_base, ib.unit_cost_orig, ib.unit_cost, 0) * COALESCE(sba.quantity_from_batch,0)) AS tc
-                                        FROM sale_batch_allocations sba
-                                        LEFT JOIN import_batches ib ON sba.batch_id = ib.id
-                                        WHERE sba.product_id = ? AND (sba.deleted IS NULL OR sba.deleted = 0)
-                                    ''', (pid,))
-                                    rowc = cur2.fetchone()
-                                    conn2.close()
-                                    tq = float(rowc['tq'] or 0.0) if rowc else 0.0
-                                    tc = float(rowc['tc'] or 0.0) if rowc else 0.0
-                                    per_unit = (tc / tq) if tq > 0 else 0.0
-                                    bucket['cogs'] -= per_unit
-                                except Exception:
-                                    pass
-                        except Exception:
-                            pass
         except Exception:
             pass
     for k, v in result.items():
@@ -2539,59 +2604,8 @@ def get_yearly_sales_profit():
         except Exception:
             pass
     else:
-        # Fallback to CSV (legacy)
-        try:
-            if RETURNS_CSV.exists():
-                import csv as _csv
-                with RETURNS_CSV.open('r', newline='') as _f:
-                    rdr = _csv.DictReader(_f)
-                    for rr in rdr:
-                        try:
-                            rd = (rr.get('ReturnDate') or '').strip()
-                            y = rd[:4] if rd else None
-                            if not y:
-                                continue
-                            refund_amt_raw = float(rr.get('RefundAmount') or 0)
-                            refund_ccy = (rr.get('RefundCurrency') or '').strip().upper()
-                            if refund_ccy:
-                                try:
-                                    base = get_base_currency()
-                                    conv = convert_amount(rd, refund_amt_raw, refund_ccy, base)
-                                    refund_amt = float(conv or 0.0)
-                                except Exception:
-                                    refund_amt = refund_amt_raw
-                            else:
-                                refund_amt = refund_amt_raw
-                            restock = str(rr.get('Restock') or '0').strip()
-                            restock_flag = 1 if restock in ('1','true','True','YES','yes') else 0
-                            pid = rr.get('ProductID')
-                            bucket = base_res.setdefault(y, {'revenue': 0.0, 'cogs': 0.0, 'gross_profit': 0.0, 'items_sold': 0.0})
-                            bucket['revenue'] -= refund_amt
-                            bucket['items_sold'] -= 1.0
-                            if restock_flag and pid:
-                                try:
-                                    conn2 = get_conn()
-                                    cur2 = conn2.cursor()
-                                    cur2.execute('''
-                                        SELECT 
-                                            SUM(COALESCE(sba.quantity_from_batch,0)) AS tq,
-                                            SUM(COALESCE(NULLIF(sba.unit_cost,0), ib.unit_cost_base, ib.unit_cost_orig, ib.unit_cost, 0) * COALESCE(sba.quantity_from_batch,0)) AS tc
-                                        FROM sale_batch_allocations sba
-                                        LEFT JOIN import_batches ib ON sba.batch_id = ib.id
-                                        WHERE sba.product_id = ? AND (sba.deleted IS NULL OR sba.deleted = 0)
-                                    ''', (pid,))
-                                    rowc = cur2.fetchone()
-                                    conn2.close()
-                                    tq = float(rowc['tq'] or 0.0) if rowc else 0.0
-                                    tc = float(rowc['tc'] or 0.0) if rowc else 0.0
-                                    per_unit = (tc / tq) if tq > 0 else 0.0
-                                    bucket['cogs'] -= per_unit
-                                except Exception:
-                                    pass
-                        except Exception:
-                            pass
-        except Exception:
-            pass
+        # No legacy CSV fallback: if returns table is empty we simply return the base_res as-is.
+        pass
     for y, v in base_res.items():
         v['gross_profit'] = float(v.get('revenue', 0.0)) - float(v.get('cogs', 0.0))
     return base_res
@@ -2620,117 +2634,8 @@ def get_yearly_expenses():
         except Exception:
             val = amt if from_ccy == base else 0.0
         totals[y] = totals.get(y, 0.0) + float(val or 0.0)
+    # DB-only: returns aggregated above; legacy CSV fallback removed.
     return totals
-
-
-def get_monthly_return_impact(year: int):
-    out = {}
-    # Prefer DB table
-    try:
-        conn2 = get_conn()
-        cur2 = conn2.cursor()
-        cur2.execute("SELECT COUNT(1) AS c FROM returns")
-        has_returns = (cur2.fetchone() or {}).get('c', 0) > 0
-        conn2.close()
-    except Exception:
-        has_returns = False
-
-    if has_returns:
-        try:
-            conn2 = get_conn()
-            cur2 = conn2.cursor()
-            cur2.execute('''
-                SELECT strftime('%Y-%m', return_date) as ym, product_id,
-                       COALESCE(refund_amount_base, 0) as refund_amount_base,
-                       COALESCE(restock, 0) as restock
-                FROM returns
-                WHERE strftime('%Y', return_date) = ?
-            ''', (str(year),))
-            for rr in cur2.fetchall():
-                ym = rr['ym']
-                bucket = out.setdefault(ym, {'returns_refunds': 0.0, 'returns_cogs_reversed': 0.0, 'items_returned': 0.0})
-                bucket['returns_refunds'] += float(rr['refund_amount_base'] or 0.0)
-                bucket['items_returned'] += 1.0
-                if int(rr['restock'] or 0):
-                    pid = rr['product_id']
-                    if pid:
-                        try:
-                            conn3 = get_conn()
-                            cur3 = conn3.cursor()
-                            cur3.execute('''
-                                SELECT 
-                                    SUM(COALESCE(sba.quantity_from_batch,0)) AS tq,
-                                    SUM(COALESCE(NULLIF(sba.unit_cost,0), ib.unit_cost_base, ib.unit_cost_orig, ib.unit_cost, 0) * COALESCE(sba.quantity_from_batch,0)) AS tc
-                                FROM sale_batch_allocations sba
-                                LEFT JOIN import_batches ib ON sba.batch_id = ib.id
-                                WHERE sba.product_id = ?
-                            ''', (pid,))
-                            rowc = cur3.fetchone()
-                            conn3.close()
-                            tq = float(rowc['tq'] or 0.0) if rowc else 0.0
-                            tc = float(rowc['tc'] or 0.0) if rowc else 0.0
-                            per_unit = (tc / tq) if tq > 0 else 0.0
-                            bucket['returns_cogs_reversed'] += per_unit
-                        except Exception:
-                            pass
-        except Exception:
-            return out
-        return out
-    # Fallback to CSV
-    try:
-        if not RETURNS_CSV.exists():
-            return out
-        import csv as _csv
-        with RETURNS_CSV.open('r', newline='') as _f:
-            rdr = _csv.DictReader(_f)
-            for rr in rdr:
-                rd = (rr.get('ReturnDate') or '').strip()
-                if not rd or rd[:4] != str(year):
-                    continue
-                ym = rd[:7]
-                bucket = out.setdefault(ym, {'returns_refunds': 0.0, 'returns_cogs_reversed': 0.0, 'items_returned': 0.0})
-                try:
-                    refund_amt_raw = float(rr.get('RefundAmount') or 0)
-                except Exception:
-                    refund_amt_raw = 0.0
-                refund_ccy = (rr.get('RefundCurrency') or '').strip().upper()
-                if refund_ccy:
-                    try:
-                        base = get_base_currency()
-                        conv = convert_amount(rd, refund_amt_raw, refund_ccy, base)
-                        refund_amt = float(conv or 0.0)
-                    except Exception:
-                        refund_amt = refund_amt_raw
-                else:
-                    refund_amt = refund_amt_raw
-                bucket['returns_refunds'] += refund_amt
-                bucket['items_returned'] += 1.0
-                restock = str(rr.get('Restock') or '0').strip()
-                if restock in ('1','true','True','YES','yes'):
-                    pid = rr.get('ProductID')
-                    if pid:
-                        try:
-                            conn2 = get_conn()
-                            cur2 = conn2.cursor()
-                            cur2.execute('''
-                                SELECT 
-                                    SUM(COALESCE(sba.quantity_from_batch,0)) AS tq,
-                                    SUM(COALESCE(NULLIF(sba.unit_cost,0), ib.unit_cost_base, ib.unit_cost_orig, ib.unit_cost, 0) * COALESCE(sba.quantity_from_batch,0)) AS tc
-                                FROM sale_batch_allocations sba
-                                LEFT JOIN import_batches ib ON sba.batch_id = ib.id
-                                WHERE sba.product_id = ?
-                            ''', (pid,))
-                            rowc = cur2.fetchone()
-                            conn2.close()
-                            tq = float(rowc['tq'] or 0.0) if rowc else 0.0
-                            tc = float(rowc['tc'] or 0.0) if rowc else 0.0
-                            per_unit = (tc / tq) if tq > 0 else 0.0
-                            bucket['returns_cogs_reversed'] += per_unit
-                        except Exception:
-                            pass
-    except Exception:
-        return out
-    return out
 
 
 def get_yearly_return_impact():
@@ -2785,60 +2690,57 @@ def get_yearly_return_impact():
         except Exception:
             return out
         return out
-    # Fallback to CSV
+    # DB-only: do not attempt to read legacy CSV files for returns.
+    # The `out` value above is built using the `returns` table; if DB access
+    # failed earlier, we return the (possibly-empty) `out` value. This avoids
+    # any runtime dependency on legacy CSV files.
+    return out
+
+
+def get_monthly_return_impact(year: int):
+    """Return a dict keyed by YYYY-MM with aggregated returns impact from the returns table.
+
+    This is DB-only and does not attempt to read legacy CSV files.
+    """
+    out = {}
     try:
-        if not RETURNS_CSV.exists():
-            return out
-        import csv as _csv
-        with RETURNS_CSV.open('r', newline='') as _f:
-            rdr = _csv.DictReader(_f)
-            for rr in rdr:
-                rd = (rr.get('ReturnDate') or '').strip()
-                if not rd:
-                    continue
-                y = rd[:4]
-                bucket = out.setdefault(y, {'returns_refunds': 0.0, 'returns_cogs_reversed': 0.0, 'items_returned': 0.0})
-                try:
-                    refund_amt_raw = float(rr.get('RefundAmount') or 0)
-                except Exception:
-                    refund_amt_raw = 0.0
-                refund_ccy = (rr.get('RefundCurrency') or '').strip().upper()
-                if refund_ccy:
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute('''
+            SELECT strftime('%Y-%m', return_date) as ym, product_id,
+                   COALESCE(refund_amount_base, 0) as refund_amount_base,
+                   COALESCE(restock, 0) as restock
+            FROM returns
+            WHERE strftime('%Y', return_date) = ?
+        ''', (str(year),))
+        for rr in cur.fetchall():
+            ym = rr['ym']
+            bucket = out.setdefault(ym, {'returns_refunds': 0.0, 'returns_cogs_reversed': 0.0, 'items_returned': 0.0})
+            bucket['returns_refunds'] += float(rr['refund_amount_base'] or 0.0)
+            bucket['items_returned'] += 1.0
+            if int(rr['restock'] or 0):
+                pid = rr['product_id']
+                if pid:
                     try:
-                        base = get_base_currency()
-                        conv = convert_amount(rd, refund_amt_raw, refund_ccy, base)
-                        refund_amt = float(conv or 0.0)
+                        cur2 = conn.cursor()
+                        cur2.execute('''
+                            SELECT 
+                                SUM(COALESCE(sba.quantity_from_batch,0)) AS tq,
+                                SUM(COALESCE(NULLIF(sba.unit_cost,0), ib.unit_cost_orig, ib.unit_cost, 0) * COALESCE(sba.quantity_from_batch,0)) AS tc
+                            FROM sale_batch_allocations sba
+                            LEFT JOIN import_batches ib ON sba.batch_id = ib.id
+                            WHERE sba.product_id = ?
+                        ''', (pid,))
+                        rowc = cur2.fetchone()
+                        tq = float(rowc['tq'] or 0.0) if rowc else 0.0
+                        tc = float(rowc['tc'] or 0.0) if rowc else 0.0
+                        per_unit = (tc / tq) if tq > 0 else 0.0
+                        bucket['returns_cogs_reversed'] += per_unit
                     except Exception:
-                        refund_amt = refund_amt_raw
-                else:
-                    refund_amt = refund_amt_raw
-                bucket['returns_refunds'] += refund_amt
-                bucket['items_returned'] += 1.0
-                restock = str(rr.get('Restock') or '0').strip()
-                if restock in ('1','true','True','YES','yes'):
-                    pid = rr.get('ProductID')
-                    if pid:
-                        try:
-                            conn2 = get_conn()
-                            cur2 = conn2.cursor()
-                            cur2.execute('''
-                                SELECT 
-                                    SUM(COALESCE(sba.quantity_from_batch,0)) AS tq,
-                                    SUM(COALESCE(NULLIF(sba.unit_cost,0), ib.unit_cost_orig, ib.unit_cost, 0) * COALESCE(sba.quantity_from_batch,0)) AS tc
-                                FROM sale_batch_allocations sba
-                                LEFT JOIN import_batches ib ON sba.batch_id = ib.id
-                                WHERE sba.product_id = ?
-                            ''', (pid,))
-                            rowc = cur2.fetchone()
-                            conn2.close()
-                            tq = float(rowc['tq'] or 0.0) if rowc else 0.0
-                            tc = float(rowc['tc'] or 0.0) if rowc else 0.0
-                            per_unit = (tc / tq) if tq > 0 else 0.0
-                            bucket['returns_cogs_reversed'] += per_unit
-                        except Exception:
-                            pass
+                        pass
+        conn.close()
     except Exception:
-        return out
+        pass
     return out
 
 
@@ -2934,88 +2836,13 @@ def build_yearly_summary():
 
 # ---------------- RETURNS MIGRATION (CSV -> DB) ----------------
 def migrate_returns_csv_to_db():
-    """If returns table is empty and returns.csv exists, import rows and compute refund_amount_base.
-    Refund currency is taken from RefundCurrency column if present; otherwise from default sale currency.
+    """No-op migration placeholder.
+
+    The repository has been converted to DB-first. Legacy CSV-based migration
+    is intentionally disabled to avoid accidental runtime CSV reads/writes.
+    This function remains for compatibility and returns immediately.
     """
-    try:
-        conn = get_conn()
-        cur = conn.cursor()
-        # Verify table exists
-        cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='returns'")
-        if not cur.fetchone():
-            conn.close()
-            return
-        cur.execute("SELECT COUNT(1) AS c FROM returns")
-        if (cur.fetchone() or {}).get('c', 0) > 0:
-            conn.close()
-            return
-        # No rows yet; migrate if CSV exists
-        if not RETURNS_CSV.exists():
-            conn.close()
-            return
-        import csv as _csv, json as _json
-        base = get_base_currency()
-        inserted = 0
-        with RETURNS_CSV.open('r', newline='') as f:
-            rdr = _csv.DictReader(f)
-            for rr in rdr:
-                rd = (rr.get('ReturnDate') or '').strip()
-                if not rd:
-                    continue
-                pid = (rr.get('ProductID') or '').strip()
-                sale_date = (rr.get('SaleDate') or '').strip()
-                category = (rr.get('Category') or '').strip()
-                subcategory = (rr.get('Subcategory') or '').strip()
-                platform = (rr.get('Platform') or '').strip()
-                reason = (rr.get('Reason') or '').strip()
-                try:
-                    unit_price = float(rr.get('UnitPrice') or 0.0)
-                except Exception:
-                    unit_price = 0.0
-                try:
-                    selling_price = float(rr.get('SellingPrice') or 0.0)
-                except Exception:
-                    selling_price = 0.0
-                try:
-                    refund_amount = float(rr.get('RefundAmount') or 0.0)
-                except Exception:
-                    refund_amount = 0.0
-                restock_val = str(rr.get('Restock') or '0').strip()
-                restock = 1 if restock_val in ('1','true','True','YES','yes') else 0
-                refund_ccy = (rr.get('RefundCurrency') or '').strip().upper() or get_default_sale_currency()
-                # Convert refund to base
-                try:
-                    conv = convert_amount(rd, refund_amount, refund_ccy, base)
-                    refund_base = float(conv) if conv is not None else (refund_amount if refund_ccy == base else 0.0)
-                except Exception:
-                    refund_base = refund_amount if refund_ccy == base else 0.0
-                # Document paths
-                doc_paths_raw = (rr.get('ReturnDocPath') or '').strip()
-                doc_paths = ''
-                if doc_paths_raw:
-                    try:
-                        # If it's a JSON array already, keep it; else wrap single path
-                        _ = _json.loads(doc_paths_raw)
-                        doc_paths = doc_paths_raw
-                    except Exception:
-                        doc_paths = _json.dumps([doc_paths_raw], ensure_ascii=False)
-                cur.execute('''
-                    INSERT INTO returns (
-                        return_date, product_id, sale_date, category, subcategory, unit_price, selling_price,
-                        platform, refund_amount, refund_currency, refund_amount_base, restock, reason, doc_paths
-                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-                ''', (rd, pid, sale_date, category, subcategory, unit_price, selling_price, platform,
-                      refund_amount, refund_ccy, refund_base, restock, reason, doc_paths))
-                inserted += 1
-        conn.commit()
-        conn.close()
-        return inserted
-    except Exception:
-        try:
-            conn.close()
-        except Exception:
-            pass
-        return 0
+    return
 
 
 # ---------------- RETURNS CRUD HELPERS ----------------
@@ -3311,113 +3138,107 @@ def get_distinct_return_reasons(limit: int = 200) -> list:
         return []
 
 # ---------------- CUSTOMER MANAGEMENT ----------------
-CUSTOMERS_CSV = DATA_DIR / "customers.csv"
-
-
-def ensure_customers_csv():
-    CUSTOMERS_CSV.parent.mkdir(parents=True, exist_ok=True)
-    desired_headers = ['customer_id', 'name', 'email', 'phone', 'address', 'notes', 'created_date']
-    if not CUSTOMERS_CSV.exists():
-        with CUSTOMERS_CSV.open('w', newline='') as f:
-            import csv
-            csv.writer(f).writerow(desired_headers)
-        return
-    try:
-        with CUSTOMERS_CSV.open('r', newline='') as f:
-            import csv
-            reader = csv.reader(f)
-            rows = list(reader)
-        if not rows:
-            with CUSTOMERS_CSV.open('w', newline='') as f:
-                csv.writer(f).writerow(desired_headers)
-            return
-        header = rows[0]
-        if header == desired_headers:
-            return
-        data = rows[1:]
-        mapped = []
-        for r in data:
-            rowd = {header[i]: r[i] if i < len(r) else '' for i in range(len(header))}
-            mapped.append({
-                'customer_id': rowd.get('customer_id', ''),
-                'name': rowd.get('name', ''),
-                'email': rowd.get('email', ''),
-                'phone': rowd.get('phone', ''),
-                'address': rowd.get('address', ''),
-                'notes': rowd.get('notes', ''),
-                'created_date': rowd.get('created_date', ''),
-            })
-        with CUSTOMERS_CSV.open('w', newline='') as f:
-            import csv
-            w = csv.DictWriter(f, fieldnames=desired_headers)
-            w.writeheader()
-            w.writerows(mapped)
-    except Exception:
-        pass
-
-
 def get_next_customer_id():
     try:
-        customers = read_customers()
-        if not customers:
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("SELECT customer_id FROM customers ORDER BY id DESC LIMIT 1")
+        row = cur.fetchone()
+        conn.close()
+        if not row:
             return "CUST001"
-        max_num = 0
-        for customer in customers:
-            cid = customer.get('customer_id', '').strip()
-            if cid.startswith('CUST') and len(cid) >= 7:
-                try:
-                    num = int(cid[4:])
-                    max_num = max(max_num, num)
-                except ValueError:
-                    continue
-        return f"CUST{max_num + 1:03d}"
+        last = row[0] if isinstance(row, (list, tuple)) else row['customer_id'] if hasattr(row, 'keys') else str(row)
+        if not last or not last.startswith('CUST'):
+            return "CUST001"
+        try:
+            num = int(last[4:])
+            return f"CUST{num + 1:03d}"
+        except Exception:
+            return "CUST001"
     except Exception:
         return "CUST001"
 
 
 def add_customer(name, email='', phone='', address='', notes=''):
-    ensure_customers_csv()
-    customer_id = get_next_customer_id()
-    created_date = datetime.now().strftime('%Y-%m-%d')
-    with CUSTOMERS_CSV.open('a', newline='') as f:
-        import csv
-        writer = csv.DictWriter(f, fieldnames=['customer_id', 'name', 'email', 'phone', 'address', 'notes', 'created_date'])
-        writer.writerow({
-            'customer_id': customer_id,
-            'name': name.strip(),
-            'email': email.strip(),
-            'phone': phone.strip(),
-            'address': address.strip(),
-            'notes': notes.strip(),
-            'created_date': created_date
-        })
-    return customer_id
+    try:
+        conn = get_conn()
+        cur = conn.cursor()
+        cid = get_next_customer_id()
+        created_date = datetime.now().strftime('%Y-%m-%d')
+        cur.execute('''
+            INSERT INTO customers(customer_id, name, email, phone, address, notes, created_date)
+            VALUES (?,?,?,?,?,?,?)
+        ''', (cid, name.strip(), email.strip(), phone.strip(), address.strip(), notes.strip(), created_date))
+        conn.commit()
+        conn.close()
+        return cid
+    except Exception:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        return None
 
 
 def read_customers():
-    ensure_customers_csv()
-    if not CUSTOMERS_CSV.exists():
+    try:
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute('SELECT customer_id, name, email, phone, address, notes, created_date FROM customers ORDER BY id DESC')
+        rows = cur.fetchall()
+        conn.close()
+        out = []
+        for r in rows:
+            if hasattr(r, 'keys'):
+                out.append({k: r[k] for k in r.keys()})
+            else:
+                out.append(dict(r))
+        return out
+    except Exception:
         return []
-    with CUSTOMERS_CSV.open('r', newline='') as f:
-        import csv
-        reader = csv.DictReader(f)
-        return list(reader)
 
 
 def write_customers(customers):
-    ensure_customers_csv()
-    with CUSTOMERS_CSV.open('w', newline='') as f:
-        import csv
-        fieldnames = ['customer_id', 'name', 'email', 'phone', 'address', 'notes', 'created_date']
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerows(customers)
+    try:
+        conn = get_conn()
+        cur = conn.cursor()
+        # Replace all customers with provided list
+        cur.execute('DELETE FROM customers')
+        for c in (customers or []):
+            cur.execute('''
+                INSERT INTO customers(customer_id, name, email, phone, address, notes, created_date)
+                VALUES (?,?,?,?,?,?,?)
+            ''', (
+                c.get('customer_id'), c.get('name'), c.get('email'), c.get('phone'), c.get('address'), c.get('notes'), c.get('created_date')
+            ))
+        conn.commit()
+        conn.close()
+    except Exception:
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 
 def find_customer_by_name(name):
-    customers = read_customers()
-    name_lower = name.lower().strip()
-    for customer in customers:
+    name_lower = (name or '').lower().strip()
+    if not name_lower:
+        return []
+    try:
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute('SELECT customer_id, name, email, phone, address, notes, created_date FROM customers WHERE LOWER(name) LIKE ? LIMIT 50', (f'%{name_lower}%',))
+        rows = cur.fetchall()
+        conn.close()
+        out = []
+        for r in rows:
+            if hasattr(r, 'keys'):
+                out.append({k: r[k] for k in r.keys()})
+            else:
+                out.append(dict(r))
+        return out
+    except Exception:
+        return []
         if customer.get('name', '').lower().strip() == name_lower:
             return customer
     return None
@@ -3470,60 +3291,221 @@ def delete_customer(customer_id):
 
 def get_customer_sales_summary(customer_id):
     try:
-        import csv
-        SALES_CSV = DATA_DIR / 'sales.csv'
-        if not SALES_CSV.exists():
-            return {'total_sales': 0, 'total_revenue': 0.0, 'sales_count': 0, 'recent_sales': []}
-        with SALES_CSV.open('r', newline='') as f:
-            reader = csv.DictReader(f)
-            customer_sales = []
-            total_revenue = 0.0
-            for row in reader:
-                if row.get('CustomerID', '').strip() == customer_id.strip():
-                    customer_sales.append(row)
-                    try:
-                        selling_price = float(row.get('SellingPrice', 0))
-                        total_revenue += selling_price
-                    except (ValueError, TypeError):
-                        pass
-        customer_sales.sort(key=lambda x: x.get('Date', ''), reverse=True)
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute('SELECT * FROM sales WHERE customer_id=? AND (deleted IS NULL OR deleted=0) ORDER BY datetime(date) DESC', (customer_id.strip(),))
+        rows = [dict(r) for r in cur.fetchall()]
+        conn.close()
+        total_revenue = 0.0
+        for row in rows:
+            try:
+                total_revenue += float(row.get('selling_price') or row.get('SellingPrice') or 0)
+            except Exception:
+                pass
         return {
-            'total_sales': len(customer_sales),
+            'total_sales': len(rows),
             'total_revenue': total_revenue,
-            'sales_count': len(customer_sales),
-            'recent_sales': customer_sales[:10]
+            'sales_count': len(rows),
+            'recent_sales': rows[:10]
         }
     except Exception:
         return {'total_sales': 0, 'total_revenue': 0.0, 'sales_count': 0, 'recent_sales': []}
 
 
-def undelete_sales_by_indices(indices: list[int]) -> int:
-    """Clear Deleted flag for rows in sales.csv by zero-based indices in the file (not including header).
-    Returns number of rows updated.
+def list_sales(include_deleted: bool = False):
+    """Return sales rows as list of dicts ordered by date ascending (oldest first).
+    include_deleted toggles inclusion of soft-deleted rows.
+    """
+    conn = get_conn()
+    cur = conn.cursor()
+    try:
+        if include_deleted:
+            cur.execute('SELECT * FROM sales ORDER BY datetime(date) ASC, id ASC')
+        else:
+            cur.execute('SELECT * FROM sales WHERE deleted IS NULL OR deleted=0 ORDER BY datetime(date) ASC, id ASC')
+        rows = [dict(r) for r in cur.fetchall()]
+        return rows
+    finally:
+        conn.close()
+
+
+def add_sale(row: dict) -> int:
+    """Insert a sale into the sales table. Returns the new row id.
+
+    Expected keys (case-insensitive): Date, Category, Subcategory, Quantity, SellingPrice, Platform, ProductID,
+    CustomerID, DocumentPath, FXToBase, SellingPriceBase, SaleCurrency
     """
     try:
-        from pathlib import Path
-        import csv as _csv
-        sales_csv = Path(__file__).resolve().parents[1] / 'data' / 'sales.csv'
-        if not sales_csv.exists():
-            return 0
-        with sales_csv.open('r', newline='') as f:
-            rdr = _csv.DictReader(f)
-            rows = list(rdr)
-            fieldnames = list(rdr.fieldnames or [])
-        changed = 0
+        conn = get_conn()
+        cur = conn.cursor()
+        # Normalize keys
+        r = {k.lower(): v for k, v in (row or {}).items()}
+        deleted_flag = r.get('deleted')
+        try:
+            deleted_val = 1 if str(deleted_flag) in ('1', 'True', 'true') else 0
+        except Exception:
+            deleted_val = 0
+        cur.execute('''INSERT INTO sales (date, category, subcategory, quantity, selling_price, platform, product_id, customer_id, document_path, fx_to_base, selling_price_base, sale_currency, deleted)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)''', (
+            r.get('date', ''),
+            r.get('category', ''),
+            r.get('subcategory', ''),
+            float_or_none(r.get('quantity')) or 0,
+            float_or_none(r.get('sellingprice') or r.get('selling_price') or r.get('unit_price')) or 0,
+            r.get('platform', ''),
+            r.get('productid') or r.get('product_id') or '',
+            r.get('customerid') or r.get('customer_id') or '',
+            r.get('documentpath') or r.get('document_path') or r.get('doc_paths') or '',
+            float_or_none(r.get('fxtobase') or r.get('fx_to_base')) or None,
+            float_or_none(r.get('sellingpricebase') or r.get('selling_price_base') or r.get('sellingpriceusd')) or None,
+            (r.get('salecurrency') or r.get('sale_currency') or '').upper(),
+            deleted_val
+        ))
+        conn.commit()
+        nid = cur.lastrowid
+        conn.close()
+        return nid
+    except Exception:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        return 0
+
+
+def overwrite_sales(rows: list) -> int:
+    """Replace all sales rows with provided rows. Returns number of rows written."""
+    conn = get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute('DELETE FROM sales')
+        count = 0
+        for r in rows or []:
+            add_sale(r)
+            count += 1
+        conn.commit()
+        return count
+    except Exception:
+        conn.rollback()
+        return 0
+    finally:
+        conn.close()
+
+
+def get_distinct_sale_platforms():
+    try:
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("SELECT DISTINCT platform FROM sales WHERE platform IS NOT NULL AND platform <> '' ORDER BY platform COLLATE NOCASE")
+        vals = [r[0] for r in cur.fetchall() if r[0] is not None]
+        conn.close()
+        return vals
+    except Exception:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        return []
+
+
+def undelete_sales_by_indices(indices: list[int]) -> int:
+    """Clear Deleted flag for rows specified by zero-based indices in the current sales ordering.
+    Returns number of rows updated."""
+    try:
+        full = list_sales(include_deleted=True)
+        ids = []
         for idx in indices:
-            if 0 <= idx < len(rows):
-                rows[idx]['Deleted'] = ''
-                changed += 1
-        # Ensure Deleted column present in fieldnames
-        if 'Deleted' not in fieldnames:
-            fieldnames.append('Deleted')
-        with sales_csv.open('w', newline='') as f:
-            w = _csv.DictWriter(f, fieldnames=fieldnames)
-            w.writeheader()
-            for r in rows:
-                w.writerow(r)
+            if 0 <= idx < len(full):
+                row = full[idx]
+                if 'id' in row:
+                    ids.append(row['id'])
+        if not ids:
+            return 0
+        conn = get_conn()
+        cur = conn.cursor()
+        q = f"UPDATE sales SET deleted=0 WHERE id IN ({','.join(['?']*len(ids))})"
+        cur.execute(q, tuple(ids))
+        conn.commit()
+        changed = cur.rowcount if cur.rowcount is not None else 0
+        conn.close()
         return changed
     except Exception:
+        try:
+            conn.close()
+        except Exception:
+            pass
         return 0
+
+
+def undelete_sales_by_ids(ids: list[int]) -> int:
+    """Clear Deleted flag for sales specified by their DB ids."""
+    if not ids:
+        return 0
+    try:
+        conn = get_conn()
+        cur = conn.cursor()
+        q = f"UPDATE sales SET deleted=0 WHERE id IN ({','.join(['?']*len(ids))})"
+        cur.execute(q, tuple(ids))
+        conn.commit()
+        changed = cur.rowcount if cur.rowcount is not None else 0
+        conn.close()
+        return changed
+    except Exception:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        return 0
+
+
+def mark_sale_deleted(ids: list[int]) -> int:
+    """Mark given sale ids as deleted (soft-delete). Returns number of rows updated."""
+    if not ids:
+        return 0
+    try:
+        conn = get_conn()
+        cur = conn.cursor()
+        q = f"UPDATE sales SET deleted=1 WHERE id IN ({','.join(['?']*len(ids))})"
+        cur.execute(q, tuple(ids))
+        conn.commit()
+        changed = cur.rowcount if cur.rowcount is not None else 0
+        conn.close()
+        return changed
+    except Exception:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        return 0
+
+
+def update_sale(sale_id: int, changes: dict) -> bool:
+    """Update fields on a sale row. `changes` keys should be DB column names (snake_case).
+    Returns True on success.
+    """
+    if not sale_id or not changes:
+        return False
+    allowed = {'date','category','subcategory','quantity','selling_price','platform','product_id','customer_id','document_path','fx_to_base','selling_price_base','sale_currency','deleted'}
+    sets = []
+    params = []
+    for k, v in changes.items():
+        if k in allowed:
+            sets.append(f"{k}=?")
+            params.append(v)
+    if not sets:
+        return False
+    params.append(sale_id)
+    try:
+        conn = get_conn()
+        cur = conn.cursor()
+        sql = f"UPDATE sales SET {', '.join(sets)} WHERE id=?"
+        cur.execute(sql, tuple(params))
+        conn.commit()
+        conn.close()
+        return True
+    except Exception:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        return False

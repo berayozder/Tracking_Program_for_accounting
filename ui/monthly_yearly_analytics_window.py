@@ -112,24 +112,24 @@ def open_monthly_yearly_analytics_window(root):
                 format_money(r.get('returns_net_impact', 0.0)),
                 f"{int(r.get('items_returned', 0.0))}",
             ]
-            iid = monthly_tree.insert('', 'end', values=vals)
+            iid = monthly_tree.insert('', 0, values=vals)
             # Color rows: net < 0 -> danger, high gp -> success
             if r['net_profit'] < 0:
                 stripe_treeview(monthly_tree, iid, 'danger')
             elif r['gross_profit'] > 0 and r['gross_profit'] >= 0.3 * max(1.0, r['revenue']):
                 stripe_treeview(monthly_tree, iid, 'success')
-        # Totals footer
-        monthly_tree.insert('', 'end', values=[
-            'TOTAL',
-            format_money(total_rev),
-            format_money(total_cogs),
-            format_money(total_gp),
-            format_money(total_exp),
-            format_money(total_net),
-            f"{int(total_items)}",
-            format_money(total_ret_net),
-            f"{int(total_items_ret)}",
-        ])
+            # Totals footer
+            monthly_tree.insert('', 0, values=[
+                'TOTAL',
+                format_money(total_rev),
+                format_money(total_cogs),
+                format_money(total_gp),
+                format_money(total_exp),
+                format_money(total_net),
+                f"{int(total_items)}",
+                format_money(total_ret_net),
+                f"{int(total_items_ret)}",
+            ])
         try:
             stripe_treeview(monthly_tree)
         except Exception:
@@ -152,7 +152,7 @@ def open_monthly_yearly_analytics_window(root):
                 format_money(r.get('returns_net_impact', 0.0)),
                 f"{int(r.get('items_returned', 0.0))}",
             ]
-            iid = yearly_tree.insert('', 'end', values=vals)
+            iid = yearly_tree.insert('', 0, values=vals)
             if r['net_profit'] < 0:
                 stripe_treeview(yearly_tree, iid, 'danger')
             elif r['gross_profit'] > 0 and r['gross_profit'] >= 0.3 * max(1.0, r['revenue']):
