@@ -496,6 +496,7 @@ def open_imports_window(root):
                         # header
                         ttk.Label(frm, text="Enter 1-3 digit codes (will be zero-padded to 3).", wraplength=480).grid(row=0, column=0, columnspan=4, sticky='w', pady=(0,6))
                         entries = []
+                        cat_vars = {}
                         # column headers
                         hdr_frame = ttk.Frame(frm)
                         hdr_frame.grid(row=1, column=0, columnspan=4, sticky='ew', pady=(0,4))
@@ -534,11 +535,19 @@ def open_imports_window(root):
                                 sub_ent.grid(row=r, column=3, padx=4, pady=2)
                                 entries.append((cval, sval, existing_cat_code, None, sub_ent))
                             else:
-                                cat_ent = tk.Entry(inner, width=6)
-                                cat_ent.grid(row=r, column=2, padx=4, pady=2)
+                                # reuse the same StringVar/Entry for categories that appear multiple times
+                                if cval not in cat_vars:
+                                    var = tk.StringVar()
+                                    cat_vars[cval] = var
+                                    cat_ent = tk.Entry(inner, width=6, textvariable=var)
+                                    cat_ent.grid(row=r, column=2, padx=4, pady=2)
+                                else:
+                                    var = cat_vars[cval]
+                                    # display label bound to the same var so user sees the shared value
+                                    ttk.Label(inner, textvariable=var, width=8).grid(row=r, column=2, padx=4, pady=2)
                                 sub_ent = tk.Entry(inner, width=6)
                                 sub_ent.grid(row=r, column=3, padx=4, pady=2)
-                                entries.append((cval, sval, None, cat_ent, sub_ent))
+                                entries.append((cval, sval, None, var, sub_ent))
                             r += 1
 
                         # action buttons
@@ -549,7 +558,7 @@ def open_imports_window(root):
                         def on_ok():
                             results = []
                             for item in entries:
-                                cval, sval, existing_cat_code, cat_ent, sub_ent = item
+                                cval, sval, existing_cat_code, cat_ent_or_var, sub_ent = item
                                 if existing_cat_code:
                                     sub_code = sub_ent.get().strip()
                                     if not (sub_code.isdigit() and 1 <= len(sub_code) <= 3):
@@ -557,7 +566,8 @@ def open_imports_window(root):
                                         return
                                     results.append((cval, sval, existing_cat_code, sub_code))
                                 else:
-                                    cat_code = (cat_ent.get() or '').strip()
+                                    # cat_ent_or_var is a StringVar in this case
+                                    cat_code = (cat_ent_or_var.get() or '').strip()
                                     sub_code = (sub_ent.get() or '').strip()
                                     if not (cat_code.isdigit() and 1 <= len(cat_code) <= 3):
                                         messagebox.showerror('Invalid', f'Invalid category code for {cval}', parent=dlg)
