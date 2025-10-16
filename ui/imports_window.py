@@ -30,8 +30,30 @@ def open_imports_window(root):
     except Exception:
         pass
 
-    tk.Label(window, text="Date (YYYY-MM-DD):").pack(pady=5)
-    date_entry = tk.Entry(window, width=25)
+    # Use a scrollable canvas for the form so bottom buttons remain visible
+    content_outer = ttk.Frame(window)
+    content_outer.pack(fill='both', expand=True)
+
+    canvas = tk.Canvas(content_outer)
+    canvas.pack(side='left', fill='both', expand=True)
+    vsb = ttk.Scrollbar(content_outer, orient='vertical', command=canvas.yview)
+    vsb.pack(side='right', fill='y')
+    canvas.configure(yscrollcommand=vsb.set)
+
+    content_frame = ttk.Frame(canvas)
+    # Put content_frame into canvas
+    canvas.create_window((0,0), window=content_frame, anchor='nw')
+
+    def _on_frame_configure(event=None):
+        try:
+            canvas.configure(scrollregion=canvas.bbox('all'))
+        except Exception:
+            pass
+
+    content_frame.bind('<Configure>', _on_frame_configure)
+
+    tk.Label(content_frame, text="Date (YYYY-MM-DD):").pack(pady=5)
+    date_entry = tk.Entry(content_frame, width=25)
     date_entry.insert(0, datetime.now().strftime('%Y-%m-%d'))
     date_entry.pack(pady=5)
 
@@ -44,10 +66,62 @@ def open_imports_window(root):
     subcategory_entry = tk.Entry(window, width=40)
     subcategory_entry.pack(pady=5)
 
+    # --- Multi-line support: a small list of lines for this import/order ---
+    ttk.Label(content_frame, text="Order lines (optional, add multiple category/subcategory lines):").pack(pady=(8,4))
+    lines_frame = ttk.Frame(content_frame)
+    lines_frame.pack(fill='x', padx=8)
+    lines_tree = ttk.Treeview(lines_frame, columns=('category','subcategory','qty','price'), show='headings', height=4)
+    for c in ('category','subcategory','qty','price'):
+        lines_tree.heading(c, text=c.title())
+        lines_tree.column(c, width=100)
+    lines_tree.pack(side='left', fill='x', expand=True)
+    lines_scroll = ttk.Scrollbar(lines_frame, orient='vertical', command=lines_tree.yview)
+    lines_tree.configure(yscrollcommand=lines_scroll.set)
+    lines_scroll.pack(side='right', fill='y')
+
+    line_buttons = ttk.Frame(content_frame)
+    line_buttons.pack(fill='x', padx=8, pady=(4,8))
+
+    def add_line():
+        c = category_entry.get().strip()
+        s = subcategory_entry.get().strip()
+        p = price_entry.get().strip()
+        q = qty_entry.get().strip()
+        if not c or not p or not q:
+            messagebox.showwarning('Missing line', 'Category, Price and Quantity are required to add a line.')
+            return
+        try:
+            float(p); float(q)
+        except Exception:
+            messagebox.showerror('Invalid', 'Price and Quantity must be numbers.')
+            return
+        # Insert the validated line at top so newest lines appear first
+        try:
+            lines_tree.insert('', 0, values=(c, s, q, p))
+        except Exception:
+            # fallback to append if insert at 0 fails for some themes
+            try:
+                lines_tree.insert('', 'end', values=(c, s, q, p))
+            except Exception:
+                pass
+
+    def remove_line():
+        sel = lines_tree.selection()
+        if not sel:
+            return
+        for iid in sel:
+            try:
+                lines_tree.delete(iid)
+            except Exception:
+                pass
+
+    themed_button(line_buttons, text='➕ Add Line', variant='primary', command=add_line).pack(side='left', padx=4)
+    themed_button(line_buttons, text='➖ Remove Line', variant='secondary', command=remove_line).pack(side='left', padx=4)
+
     # Product name and id removed per user request
 
-    tk.Label(window, text="Ordered Price (per unit):").pack(pady=5)
-    price_entry = tk.Entry(window, width=20)
+    tk.Label(content_frame, text="Ordered Price (per unit):").pack(pady=5)
+    price_entry = tk.Entry(content_frame, width=20)
     price_entry.pack(pady=5)
 
     # Currency selection with default from settings
@@ -56,20 +130,23 @@ def open_imports_window(root):
         _default_ccy = _db.get_default_import_currency()
     except Exception:
         _default_ccy = 'USD'
-    ttk.Label(window, text="Currency:").pack(pady=4)
+    ttk.Label(content_frame, text="Currency:").pack(pady=4)
     currency_var = tk.StringVar(value=_default_ccy)
     cur_cb = ttk.Combobox(window, values=['USD','TRY','EUR','GBP'], textvariable=currency_var, state='readonly', width=10)
     cur_cb.pack(pady=(0,6))
 
     # Suggested FX (fetched) + manual override
-    ttk.Label(window, text="Suggested FX (to base currency):").pack(pady=(6,2))
+    ttk.Label(content_frame, text="Suggested FX (to base currency):").pack(pady=(6,2))
     suggested_fx_var = tk.StringVar(value='')
-    suggested_fx_label = ttk.Label(window, textvariable=suggested_fx_var)
+    suggested_fx_label = ttk.Label(content_frame, textvariable=suggested_fx_var)
     suggested_fx_label.pack()
 
-    ttk.Label(window, text="Override FX (leave empty to accept suggested):").pack(pady=(6,2))
-    fx_entry = tk.Entry(window, width=20)
+    ttk.Label(content_frame, text="Override FX (leave empty to accept suggested):").pack(pady=(6,2))
+    fx_entry = tk.Entry(content_frame, width=20)
     fx_entry.pack(pady=(0,6))
+
+    # Note: import-level expenses are captured via the Expenses screen now;
+    # they are not requested on the Record Import window.
 
     def fetch_and_show_fx(event=None):
         d = date_entry.get().strip()
@@ -91,12 +168,12 @@ def open_imports_window(root):
     date_entry.bind('<FocusOut>', fetch_and_show_fx)
     cur_cb.bind('<<ComboboxSelected>>', fetch_and_show_fx)
 
-    tk.Label(window, text="Quantity: ").pack(pady=5)
-    qty_entry = tk.Entry(window, width=20)
+    tk.Label(content_frame, text="Quantity: ").pack(pady=5)
+    qty_entry = tk.Entry(content_frame, width=20)
     qty_entry.pack(pady=5)
 
-    tk.Label(window, text="Supplier (optional): ").pack(pady=5)
-    supplier_entry = tk.Entry(window, width=40)
+    tk.Label(content_frame, text="Supplier (optional): ").pack(pady=5)
+    supplier_entry = tk.Entry(content_frame, width=40)
     supplier_entry.pack(pady=5)
 
     # --- Supplier suggestions dropdown (like category/subcategory) ---
@@ -194,8 +271,8 @@ def open_imports_window(root):
     # Hide dropdown when focus leaves supplier entry
     supplier_entry.bind('<FocusOut>', lambda e: _destroy_supplier_dropdown())
 
-    tk.Label(window, text="Notes: ").pack(pady=5)
-    notes_entry = tk.Entry(window, width=40)
+    tk.Label(content_frame, text="Notes: ").pack(pady=5)
+    notes_entry = tk.Entry(content_frame, width=40)
     notes_entry.pack(pady=5)
 
     # --- Suggestion dropdown placeholders ---
@@ -209,8 +286,8 @@ def open_imports_window(root):
         try:
             rows = db.get_imports(limit=10000)
             for r in rows:
-                c = (r.get('category') or '').strip()
-                s = (r.get('subcategory') or '').strip()
+                c = str(r.get('category') or '').strip()
+                s = str(r.get('subcategory') or '').strip()
                 if c:
                     cats.add(c)
                 if s:
@@ -356,71 +433,8 @@ def open_imports_window(root):
         except Exception:
             row_date = datetime.now().strftime('%Y-%m-%d')
 
-        # Ensure product code mapping exists for category/subcategory (for future product IDs)
-        try:
-            codes = db.get_product_code(category, subcategory)
-        except Exception:
-            codes = None
-        if not codes:
-            # Check if the category already has a cat_code; if so, only ask for subcategory code.
-            existing_cat_code = None
-            try:
-                existing_cat_code = db.get_cat_code_for_category(category)
-            except Exception:
-                existing_cat_code = None
-
-            if existing_cat_code:
-                # Ask only for subcategory code
-                while True:
-                    sub_code = ask_string(window, "Subcategory Code", f"Enter 3-digit code for subcategory '{subcategory or '-'}' (e.g., 002):")
-                    if sub_code is None:
-                        if not messagebox.askyesno("Missing code", "Subcategory code is required to generate product IDs later. Cancel saving import?", parent=window):
-                            continue
-                        else:
-                            return
-                    sub_code = sub_code.strip()
-                    if sub_code.isdigit() and 1 <= len(sub_code) <= 3:
-                        break
-                    else:
-                        messagebox.showerror("Invalid code", "Please enter 1-3 digits (will be zero-padded to 3).", parent=window)
-                try:
-                    db.set_product_code(category, subcategory, existing_cat_code, sub_code, next_serial=1)
-                except Exception as e:
-                    messagebox.showerror("Error", f"Failed to save product codes: {e}")
-                    return
-            else:
-                # Ask for both category and subcategory codes
-                while True:
-                    cat_code = ask_string(window, "Category Code", f"Enter 3-digit code for category '{category}' (e.g., 001):")
-                    if cat_code is None:
-                        if not messagebox.askyesno("Missing codes", "Category/Subcategory codes are required to generate product IDs later. Cancel saving import?", parent=window):
-                            continue
-                        else:
-                            return
-                    cat_code = cat_code.strip()
-                    if cat_code.isdigit() and 1 <= len(cat_code) <= 3:
-                        break
-                    else:
-                        messagebox.showerror("Invalid code", "Please enter 1-3 digits (will be zero-padded to 3).", parent=window)
-
-                while True:
-                    sub_code = ask_string(window, "Subcategory Code", f"Enter 3-digit code for subcategory '{subcategory or '-'}' (e.g., 002):")
-                    if sub_code is None:
-                        if not messagebox.askyesno("Missing codes", "Category/Subcategory codes are required to generate product IDs later. Cancel saving import?", parent=window):
-                            continue
-                        else:
-                            return
-                    sub_code = sub_code.strip()
-                    if sub_code.isdigit() and 1 <= len(sub_code) <= 3:
-                        break
-                    else:
-                        messagebox.showerror("Invalid code", "Please enter 1-3 digits (will be zero-padded to 3).", parent=window)
-
-                try:
-                    db.set_product_code(category, subcategory, cat_code, sub_code, next_serial=1)
-                except Exception as e:
-                    messagebox.showerror("Error", f"Failed to save product codes: {e}")
-                    return
+        # Product code prompting for category/subcategory is handled per-import-line below
+        # (so multi-line imports can request codes for each unique category/subcategory pair).
 
         # insert into DB (db.add_import will also update inventory and link/create supplier if provided)
         try:
@@ -431,7 +445,174 @@ def open_imports_window(root):
                 fx_override_val = float(v) if v else None
             except Exception:
                 fx_override_val = None
-            db.add_import(row_date, price, qty, supplier, notes, category, subcategory, cur, fx_override_val)
+            # Collect lines from tree, if any
+            lines = []
+            for iid in lines_tree.get_children():
+                vals = lines_tree.item(iid).get('values', ())
+                try:
+                    ln_cat = str(vals[0]) if vals and len(vals) > 0 else ''
+                    ln_sub = str(vals[1]) if vals and len(vals) > 1 else ''
+                    ln_qty = float(vals[2])
+                    ln_price = float(vals[3])
+                    lines.append({'category': ln_cat, 'subcategory': ln_sub, 'ordered_price': ln_price, 'quantity': ln_qty})
+                except Exception:
+                    continue
+
+            # If import has multiple lines, ensure product code mappings exist for each unique category/subcategory pair
+            if lines:
+                # collect unique (category, subcategory) pairs
+                pairs = []
+                seen = set()
+                for l in lines:
+                    key = ( str(l.get('category') or '').strip(), str(l.get('subcategory') or '').strip() )
+                    if key not in seen:
+                        seen.add(key)
+                        pairs.append(key)
+
+                # find which pairs are missing codes
+                missing = []
+                cat_code_map = {}
+                for (ln_cat, ln_sub) in pairs:
+                    try:
+                        codes = db.get_product_code(ln_cat, ln_sub)
+                    except Exception:
+                        codes = None
+                    if codes:
+                        continue
+                    # check if category already has a cat_code; cache results
+                    existing_cat_code = cat_code_map.get(ln_cat)
+                    if existing_cat_code is None:
+                        try:
+                            existing_cat_code = db.get_cat_code_for_category(ln_cat)
+                        except Exception:
+                            existing_cat_code = None
+                        cat_code_map[ln_cat] = existing_cat_code
+
+                    missing.append((ln_cat, ln_sub, existing_cat_code))
+
+                if missing:
+                    # present a compact dialog to collect all missing codes at once
+                    def collect_codes_dialog(missing_pairs):
+                        dlg = tk.Toplevel(window)
+                        dlg.title('Enter missing product codes')
+                        try:
+                            dlg.minsize(520, 220)
+                        except Exception:
+                            pass
+                        frm = ttk.Frame(dlg, padding=(8,6))
+                        frm.pack(fill='both', expand=True)
+                        # header
+                        ttk.Label(frm, text="Enter 1-3 digit codes (will be zero-padded to 3).", wraplength=480).grid(row=0, column=0, columnspan=4, sticky='w', pady=(0,6))
+                        entries = []
+                        cat_vars = {}
+                        # column headers
+                        hdr_frame = ttk.Frame(frm)
+                        hdr_frame.grid(row=1, column=0, columnspan=4, sticky='ew', pady=(0,4))
+                        ttk.Label(hdr_frame, text='Category', width=24).grid(row=0, column=0, padx=4)
+                        ttk.Label(hdr_frame, text='Subcategory', width=20).grid(row=0, column=1, padx=4)
+                        ttk.Label(hdr_frame, text='Cat Code', width=8).grid(row=0, column=2, padx=4)
+                        ttk.Label(hdr_frame, text='Sub Code', width=8).grid(row=0, column=3, padx=4)
+
+                        # scrollable area
+                        canvas2 = tk.Canvas(frm, height=160)
+                        vsb2 = ttk.Scrollbar(frm, orient='vertical', command=canvas2.yview)
+                        inner = ttk.Frame(canvas2)
+                        canvas2.create_window((0,0), window=inner, anchor='nw')
+                        canvas2.configure(yscrollcommand=vsb2.set)
+                        canvas2.grid(row=2, column=0, columnspan=3, sticky='nsew')
+                        vsb2.grid(row=2, column=3, sticky='ns')
+                        frm.grid_rowconfigure(2, weight=1)
+                        frm.grid_columnconfigure(0, weight=1)
+
+                        def _on_cfg(e=None):
+                            try:
+                                canvas2.configure(scrollregion=canvas2.bbox('all'))
+                            except Exception:
+                                pass
+
+                        inner.bind('<Configure>', _on_cfg)
+
+                        r = 0
+                        for (cval, sval, existing_cat_code) in missing_pairs:
+                            ttk.Label(inner, text=cval, width=24, anchor='w').grid(row=r, column=0, padx=4, pady=2, sticky='w')
+                            ttk.Label(inner, text=(sval or '-'), width=20, anchor='w').grid(row=r, column=1, padx=4, pady=2, sticky='w')
+                            if existing_cat_code:
+                                # show existing cat code read-only
+                                ttk.Label(inner, text=str(existing_cat_code), width=8).grid(row=r, column=2, padx=4, pady=2)
+                                sub_ent = tk.Entry(inner, width=6)
+                                sub_ent.grid(row=r, column=3, padx=4, pady=2)
+                                entries.append((cval, sval, existing_cat_code, None, sub_ent))
+                            else:
+                                # reuse the same StringVar/Entry for categories that appear multiple times
+                                if cval not in cat_vars:
+                                    var = tk.StringVar()
+                                    cat_vars[cval] = var
+                                    cat_ent = tk.Entry(inner, width=6, textvariable=var)
+                                    cat_ent.grid(row=r, column=2, padx=4, pady=2)
+                                else:
+                                    var = cat_vars[cval]
+                                    # display label bound to the same var so user sees the shared value
+                                    ttk.Label(inner, textvariable=var, width=8).grid(row=r, column=2, padx=4, pady=2)
+                                sub_ent = tk.Entry(inner, width=6)
+                                sub_ent.grid(row=r, column=3, padx=4, pady=2)
+                                entries.append((cval, sval, None, var, sub_ent))
+                            r += 1
+
+                        # action buttons
+                        btns = ttk.Frame(dlg, padding=(6,6))
+                        btns.pack(fill='x')
+                        def on_cancel():
+                            dlg.destroy()
+                        def on_ok():
+                            results = []
+                            for item in entries:
+                                cval, sval, existing_cat_code, cat_ent_or_var, sub_ent = item
+                                if existing_cat_code:
+                                    sub_code = sub_ent.get().strip()
+                                    if not (sub_code.isdigit() and 1 <= len(sub_code) <= 3):
+                                        messagebox.showerror('Invalid', f'Invalid subcategory code for {cval}/{sval or "-"}', parent=dlg)
+                                        return
+                                    results.append((cval, sval, existing_cat_code, sub_code))
+                                else:
+                                    # cat_ent_or_var is a StringVar in this case
+                                    cat_code = (cat_ent_or_var.get() or '').strip()
+                                    sub_code = (sub_ent.get() or '').strip()
+                                    if not (cat_code.isdigit() and 1 <= len(cat_code) <= 3):
+                                        messagebox.showerror('Invalid', f'Invalid category code for {cval}', parent=dlg)
+                                        return
+                                    if not (sub_code.isdigit() and 1 <= len(sub_code) <= 3):
+                                        messagebox.showerror('Invalid', f'Invalid subcategory code for {cval}/{sval or "-"}', parent=dlg)
+                                        return
+                                    results.append((cval, sval, cat_code, sub_code))
+                            dlg.results = results
+                            dlg.destroy()
+
+                        themed_button(btns, text='Cancel', variant='secondary', command=on_cancel).pack(side='left')
+                        themed_button(btns, text='Save codes', variant='primary', command=on_ok).pack(side='right')
+                        dlg.transient(window)
+                        dlg.grab_set()
+                        window.wait_window(dlg)
+                        return getattr(dlg, 'results', None)
+
+                    collected = collect_codes_dialog(missing)
+                    if not collected:
+                        # user cancelled
+                        return
+
+                    # persist collected codes
+                    for (cval, sval, cat_code, sub_code) in collected:
+                        # cat_code may already be an existing code or newly provided string
+                        try:
+                            db.set_product_code(cval, sval, cat_code, sub_code, next_serial=1)
+                        except Exception as e:
+                            messagebox.showerror('Error', f'Failed to save product codes: {e}')
+                            return
+
+            # Expenses are handled separately via the Expenses window; do not collect here.
+            if lines:
+                db.add_import(row_date, price, qty, supplier, notes, '', '', cur, fx_override_val, lines=lines)
+            else:
+                db.add_import(row_date, price, qty, supplier, notes, category, subcategory, cur, fx_override_val)
         except Exception as e:
             messagebox.showerror("Error", f"Failed to save import: {e}")
             return
@@ -439,7 +620,11 @@ def open_imports_window(root):
         messagebox.showinfo("Saved", "Import saved.")
         window.destroy()
 
-    themed_button(window, text="Save Import", variant='primary', command=save_import).pack(pady=15)
+    # Bottom action bar with fixed Save/Cancel buttons
+    action_bar = ttk.Frame(window, padding=8)
+    action_bar.pack(side='bottom', fill='x')
+    themed_button(action_bar, text="Cancel", variant='secondary', command=window.destroy).pack(side='left')
+    themed_button(action_bar, text="Save Import", variant='primary', command=save_import).pack(side='right')
 
 
 def update_inventory(category, subcategory, quantity):

@@ -145,7 +145,7 @@ def open_customers_window(root):
                     customer.get('created_date', '')
                 ]
                 
-                item_id = tree.insert('', 'end', values=values)
+                item_id = tree.insert('', 0, values=values)
                 shown_count += 1
                 
                 # Color code based on sales activity

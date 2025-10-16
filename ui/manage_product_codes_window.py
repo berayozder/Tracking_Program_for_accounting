@@ -63,15 +63,41 @@ def open_manage_product_codes_window(root):
             stripe_treeview(tree)
         except Exception:
             pass
+        # Load existing mapped product codes
         rows = db.get_all_product_codes()
+        mapped = {}
         for idx, r in enumerate(rows):
-            tree.insert('', tk.END, iid=str(idx), values=[
-                r.get('category', ''),
-                r.get('subcategory', ''),
-                str(r.get('cat_code', '')).zfill(3),
-                str(r.get('sub_code', '')).zfill(3),
+            cat = (r.get('category') or '').strip()
+            sub = (r.get('subcategory') or '').strip()
+            mapped[(cat, sub)] = r
+            tree.insert('', 0, iid=f'mapped-{idx}', values=[
+                cat,
+                sub,
+                str(r.get('cat_code', '')).zfill(3) if r.get('cat_code') not in (None, '') else '',
+                str(r.get('sub_code', '')).zfill(3) if r.get('sub_code') not in (None, '') else '',
                 r.get('next_serial', 1),
             ])
+        # Also include any category/subcategory pairs present in imports/import_lines but not yet mapped
+        try:
+            imports = db.get_imports_with_lines(limit=5000)
+            unseen = set()
+            for imp in imports:
+                lines = imp.get('lines') or []
+                if lines:
+                    for ln in lines:
+                        cat = (ln.get('category') or '').strip()
+                        sub = (ln.get('subcategory') or '').strip()
+                        if (cat, sub) and (cat, sub) not in mapped and (cat, sub) not in unseen:
+                            unseen.add((cat, sub))
+                else:
+                    cat = (imp.get('category') or '').strip()
+                    sub = (imp.get('subcategory') or '').strip()
+                    if (cat, sub) and (cat, sub) not in mapped and (cat, sub) not in unseen:
+                        unseen.add((cat, sub))
+            for i, (cat, sub) in enumerate(sorted(unseen)):
+                tree.insert('', 0, iid=f'unmapped-{i}', values=[cat, sub, '', '', ''])
+        except Exception:
+            pass
         # Apply zebra striping across all rows
         try:
             stripe_treeview(tree)
@@ -81,7 +107,7 @@ def open_manage_product_codes_window(root):
     def add_or_edit(existing=None):
         dlg = tk.Toplevel(win)
         dlg.title('Edit Codes' if existing else 'Add Codes')
-        dlg.geometry('420x320')
+        dlg.geometry('550x400')
 
         entries = {}
 

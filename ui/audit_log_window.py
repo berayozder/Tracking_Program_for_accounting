@@ -85,7 +85,7 @@ def open_audit_log_window(root):
             limit=5000,
         )
         for r in rows:
-            tree.insert('', tk.END, values=[r.get(c, '') for c in cols])
+            tree.insert('', 0, values=[r.get(c, '') for c in cols])
         try:
             stripe_treeview(tree)
         except Exception:

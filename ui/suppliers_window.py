@@ -107,7 +107,7 @@ def open_suppliers_window(root):
                     f"${summary['total_purchases']:.2f}",
                     summary['last_purchase'] or '',
                 ]
-                item_id = tree.insert('', 'end', values=values)
+                item_id = tree.insert('', 0, values=values)
                 count += 1
                 # Color by activity
                 if summary['import_count'] == 0:

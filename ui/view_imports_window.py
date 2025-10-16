@@ -128,16 +128,32 @@ def open_view_imports_window(root):
             tree.delete(r)
         total_qty = 0.0
         total_cost_usd = 0.0
-        for row in _fetch_imports(show_deleted_var.get()):
+        # Collect rows that match search, then sort newest->oldest for display
+        fetched = list(_fetch_imports(show_deleted_var.get()))
+        shown_rows = []
+        for row in fetched:
             if row_matches(row, search_var.get().strip()):
-                tree.insert('', tk.END, values=[row.get(c, '') for c in cols])
+                shown_rows.append(row)
+        # Sort by numeric id if available, otherwise by date string (YYYY-MM-DD) — newest first
+        def _sort_key(r):
+            try:
+                return int(r.get('id'))
+            except Exception:
                 try:
-                    q = float(row.get('quantity') or 0)
-                    p = float(row.get('ordered_price') or 0)
-                    total_qty += q
-                    total_cost_usd += q * p
+                    return r.get('date') or ''
                 except Exception:
-                    pass
+                    return ''
+        shown_rows.sort(key=_sort_key, reverse=True)
+
+        for row in shown_rows:
+            tree.insert('', 'end', values=[row.get(c, '') for c in cols])
+            try:
+                q = float(row.get('quantity') or 0)
+                p = float(row.get('ordered_price') or 0)
+                total_qty += q
+                total_cost_usd += q * p
+            except Exception:
+                pass
         totals_var.set(f"Rows: {len(tree.get_children())}    Total Qty: {total_qty:.2f}    Total Cost (USD): {total_cost_usd:.2f}")
         try:
             stripe_treeview(tree)
@@ -303,8 +319,54 @@ def open_view_imports_window(root):
     # Secondary actions: edit, delete, undelete, export
     themed_button(secondary_frame, text='✏️ Edit', variant='success', command=do_edit).pack(side=tk.LEFT, padx=4)
     themed_button(secondary_frame, text='🗑️ Delete', variant='danger', command=do_delete).pack(side=tk.LEFT, padx=4)
+    themed_button(secondary_frame, text='📋 Show Lines', variant='secondary', command=lambda: show_lines_for_selected()).pack(side=tk.LEFT, padx=4)
     ttk.Checkbutton(secondary_frame, text='Show deleted', variable=show_deleted_var, command=refresh).pack(side=tk.LEFT, padx=(6, 4))
     themed_button(secondary_frame, text='♻️ Undelete', variant='primary', command=do_undelete).pack(side=tk.LEFT, padx=4)
     themed_button(secondary_frame, text='📄 Export CSV', variant='secondary', command=lambda: export_treeview_csv(window, tree, cols, 'Export Imports')).pack(side=tk.LEFT, padx=(8, 0))
 
     btn_frame.pack(fill='x', pady=8)
+
+    def show_lines_for_selected():
+        rec = get_selected_import()
+        if not rec:
+            messagebox.showwarning('Select', 'Select a row first')
+            return
+        try:
+            imp_id = int(rec.get('id') or rec.get('ID') or rec.get('Id') or 0)
+        except Exception:
+            messagebox.showerror('Error', 'Could not determine import id for selected row')
+            return
+        # Fetch imports with lines and find matching id
+        try:
+            imports = db.get_imports_with_lines(limit=1000)
+            target = None
+            for imp in imports:
+                if int(imp.get('id')) == imp_id:
+                    target = imp
+                    break
+            if not target:
+                messagebox.showinfo('No lines', 'No detailed lines found for the selected import')
+                return
+            # Show modal dialog with lines
+            d = tk.Toplevel(window)
+            d.title(f'Import {imp_id} — Lines')
+            d.geometry('600x300')
+            try:
+                apply_theme(d)
+            except Exception:
+                pass
+            tree_l = ttk.Treeview(d, columns=('id','category','subcategory','quantity','ordered_price'), show='headings')
+            for c in ('id','category','subcategory','quantity','ordered_price'):
+                tree_l.heading(c, text=c.title())
+                tree_l.column(c, width=120, anchor=tk.CENTER)
+            tree_l.pack(expand=True, fill='both', padx=8, pady=8)
+            for ln in target.get('lines', []):
+                tree_l.insert('', 0, values=(ln.get('id'), ln.get('category'), ln.get('subcategory'), ln.get('quantity'), ln.get('ordered_price')))
+            themed_button(d, text='Close', variant='secondary', command=d.destroy).pack(pady=6)
+        except Exception as e:
+            messagebox.showerror('Error', f'Failed to load lines: {e}')
+
+    # Double-click on a row to show lines as well
+    def on_row_double_click(event=None):
+        show_lines_for_selected()
+    tree.bind('<Double-1>', on_row_double_click)

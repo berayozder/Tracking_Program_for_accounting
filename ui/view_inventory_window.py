@@ -112,7 +112,7 @@ def open_view_inventory_window(root):
         total_qty = 0.0
         for row in db.get_inventory():
             if row_matches(row, search_var.get().strip()):
-                tree.insert('', tk.END, values=[row.get(c, '') for c in cols])
+                tree.insert('', 0, values=[row.get(c, '') for c in cols])
                 count += 1
                 try:
                     total_qty += float(row.get('quantity') or 0)

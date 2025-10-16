@@ -234,7 +234,7 @@ def open_view_expenses_window(root):
                 vals = [row_vals.get(c, '') for c in cols]
                 # Use DB id as iid so undelete maps back easily
                 iid = str(row.get('id'))
-                tree.insert('', tk.END, iid=iid, values=vals)
+                tree.insert('', 0, iid=iid, values=vals)
                 records_by_iid[iid] = row
                 count += 1
                 try:

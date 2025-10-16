@@ -188,9 +188,9 @@ def open_view_returns_window(root):
                     tag = 'returned_nonrestocked'
                 # Insert with tag if determined
                 if tag:
-                    tree.insert('', tk.END, iid=iid, values=vals, tags=(tag,))
+                    tree.insert('', 0, iid=iid, values=vals, tags=(tag,))
                 else:
-                    tree.insert('', tk.END, iid=iid, values=vals)
+                    tree.insert('', 0, iid=iid, values=vals)
                 last_rows.append(rowd)
                 count += 1
                 try:

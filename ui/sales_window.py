@@ -1,84 +1,29 @@
 import tkinter as tk
 from tkinter import ttk, messagebox
 from datetime import datetime
-import csv
 from pathlib import Path
 import db.db as db
 import core.fx_rates as fx_rates
 
 """Record Sale UI writing to CSV.
 CSV columns (canonical):
-Date, Category, Subcategory, Quantity, UnitPrice, SellingPrice, Platform, ProductID, CustomerID, DocumentPath,
-SaleFXToTRY, SellingPriceBase
+Date, Category, Subcategory, Quantity, SellingPrice, Platform, ProductID, CustomerID, DocumentPath,
+FXToBase, SellingPriceBase, SaleCurrency
 """
 
-# Use the project data/sales.csv
-SALES_CSV = Path(__file__).resolve().parents[1] / 'data' / 'sales.csv'
-
-
-def ensure_sales_csv():
-    # Ensure data directory exists
-    try:
-        SALES_CSV.parent.mkdir(parents=True, exist_ok=True)
-    except Exception:
-        pass
-    desired = ['Date', 'Category', 'Subcategory', 'Quantity', 'UnitPrice', 'SellingPrice', 'Platform', 'ProductID', 'CustomerID', 'DocumentPath', 'FXToBase', 'SellingPriceBase', 'SaleCurrency']
-    if not SALES_CSV.exists():
-        with SALES_CSV.open('w', newline='') as f:
-            csv.writer(f).writerow(desired)
-        return
-    # migrate header if outdated
-    try:
-        with SALES_CSV.open('r', newline='') as f:
-            reader = csv.reader(f)
-            rows = list(reader)
-        if not rows:
-            with SALES_CSV.open('w', newline='') as f:
-                csv.writer(f).writerow(desired)
-            return
-        header = rows[0]
-        if header == desired:
-            return
-        data = rows[1:]
-        # map existing rows to new header
-        mapped = []
-        for r in data:
-            rowd = {header[i]: r[i] if i < len(r) else '' for i in range(len(header))}
-            mapped.append({
-                'Date': rowd.get('Date', ''),
-                'Category': rowd.get('Category', ''),
-                'Subcategory': rowd.get('Subcategory', ''),
-                'Quantity': rowd.get('Quantity', ''),
-                'UnitPrice': rowd.get('UnitPrice', ''),
-                'SellingPrice': rowd.get('SellingPrice', ''),
-                'Platform': rowd.get('Platform', ''),
-                'ProductID': rowd.get('ProductID', ''),
-                'CustomerID': rowd.get('CustomerID', ''),
-                'DocumentPath': rowd.get('DocumentPath', ''),
-                'FXToBase': rowd.get('FXToBase', rowd.get('SaleFXToTRY', '')),
-                # Backward compatibility: migrate old SellingPriceUSD to SellingPriceBase
-                'SellingPriceBase': rowd.get('SellingPriceBase', rowd.get('SellingPriceUSD', '')),
-                    'SaleCurrency': rowd.get('SaleCurrency', ''),
-            })
-        with SALES_CSV.open('w', newline='') as f:
-            w = csv.DictWriter(f, fieldnames=desired)
-            w.writeheader()
-            w.writerows(mapped)
-    except Exception:
-        # if migration fails silently, keep existing header; appends will still use desired order
-        pass
 
 
 def append_sale(row_dict):
-    ensure_sales_csv()
-    cols = ['Date', 'Category', 'Subcategory', 'Quantity', 'UnitPrice', 'SellingPrice', 'Platform', 'ProductID', 'CustomerID', 'DocumentPath', 'FXToBase', 'SellingPriceBase', 'SaleCurrency']
-    with SALES_CSV.open('a', newline='') as f:
-        writer = csv.DictWriter(f, fieldnames=cols)
-        writer.writerow({k: row_dict.get(k, '') for k in cols})
+    """Persist a sale using the DB helper (backwards-compatible signature)."""
+    try:
+        nid = db.add_sale(row_dict)
+        return nid
+    except Exception:
+        return None
 
 
 def open_sales_window(root):
-    ensure_sales_csv()
+    # Sales are persisted in the `sales` table (DB-first); the UI uses DB helpers.
 
     win = tk.Toplevel(root)
     win.title('💰 Record Sale')
@@ -101,6 +46,14 @@ def open_sales_window(root):
     inv_rows = []
     try:
         inv_rows = db.get_inventory() or []
+        # If inventory empty, attempt to rebuild from imports (in case DB was just initialized)
+        if not inv_rows:
+            try:
+                db.rebuild_inventory_from_imports()
+                inv_rows = db.get_inventory() or []
+            except Exception:
+                # If rebuild fails, continue with empty inventory
+                inv_rows = []
     except Exception:
         inv_rows = []
     cat_to_subs = {}
@@ -296,14 +249,8 @@ def open_sales_window(root):
     ttk.Label(platform_frame, text='Platform:', font=('', 9, 'bold')).pack(side='left', anchor='w')
     def load_platform_suggestions():
         try:
-            with SALES_CSV.open('r', newline='') as f:
-                reader = csv.DictReader(f)
-                vals = set()
-                for row in reader:
-                    v = (row.get('Platform') or '').strip()
-                    if v:
-                        vals.add(v)
-                return sorted(vals)
+            vals = db.get_distinct_sale_platforms()
+            return sorted(vals or [])
         except Exception:
             return []
 
@@ -692,7 +639,6 @@ def open_sales_window(root):
                 'Category': cat,
                 'Subcategory': sub,
                 'Quantity': 1,
-                'UnitPrice': unit,
                 'SellingPrice': unit,
                 'SaleCurrency': (sale_ccy_var.get() or ''),
                 'Platform': platform,
