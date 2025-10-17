@@ -2,7 +2,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 from datetime import datetime
 from pathlib import Path
-import db.db as db
+import db as db
 import core.fx_rates as fx_rates
 
 """Record Sale UI writing to CSV.

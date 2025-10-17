@@ -1,7 +1,7 @@
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 from datetime import datetime
-import db.db as db
+import db as db
 from .theme import stripe_treeview, maximize_window, apply_theme, themed_button
 import os
 import json

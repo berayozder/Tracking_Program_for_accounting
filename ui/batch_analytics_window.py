@@ -1,6 +1,6 @@
 import tkinter as tk
 from tkinter import ttk, messagebox
-import db.db as db
+import db as db
 from .theme import stripe_treeview, maximize_window, themed_button
 
 def open_batch_analytics_window(root):

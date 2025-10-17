@@ -7,8 +7,8 @@ import sys
 import subprocess
 from .theme import stripe_treeview, maximize_window, apply_theme, themed_button
 
-import db.db as db
-from db.db import list_returns as db_list_returns, update_return as db_update_return, delete_return as db_delete_return, undelete_return as db_undelete_return
+import db as db
+from db.returns_dao import list_returns as db_list_returns, update_return as db_update_return, delete_return as db_delete_return, undelete_return as db_undelete_return
 
 # Columns from DB (read-only ones are disabled in edit).
 DB_COLS = ['id', 'return_date', 'product_id', 'sale_date', 'category', 'subcategory', 'unit_price', 'selling_price', 'platform', 'refund_amount', 'refund_currency', 'refund_amount_base', 'restock', 'reason', 'doc_paths']
@@ -317,7 +317,7 @@ def open_view_returns_window(root):
         ttk.Label(dlg, text='Reason:').pack(pady=4)
         # Suggestions from DB plus defaults
         try:
-            import db.db as db
+            import db as db
             reasons = db.get_distinct_return_reasons() or []
         except Exception:
             reasons = []
@@ -348,7 +348,7 @@ def open_view_returns_window(root):
             val = reason_var.get().strip()
             if val and val not in suggestions:
                 try:
-                    import db.db as db
+                    import db as db
                     db.add_return_reason(val)
                     suggestions.append(val)
                     reason_combo['values'] = suggestions

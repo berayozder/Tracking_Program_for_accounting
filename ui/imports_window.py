@@ -1,7 +1,7 @@
 import tkinter as tk
 from tkinter import ttk, messagebox
 from datetime import datetime
-import db.db as db
+import db as db
 from .theme import apply_theme, maximize_window
 from .theme import ask_string, themed_button
 
@@ -126,7 +126,7 @@ def open_imports_window(root):
 
     # Currency selection with default from settings
     try:
-        import db.db as _db  # local to avoid circular during module import
+        import db as _db  # local to avoid circular during module import
         _default_ccy = _db.get_default_import_currency()
     except Exception:
         _default_ccy = 'USD'

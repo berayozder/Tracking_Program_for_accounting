@@ -3,7 +3,7 @@ from tkinter import ttk, messagebox, filedialog
 from datetime import datetime
 from pathlib import Path
 import shutil
-import db.db as db
+import db as db
 from .theme import maximize_window, themed_button
 
 

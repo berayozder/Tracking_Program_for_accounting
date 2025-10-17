@@ -1,6 +1,6 @@
 import tkinter as tk
 from tkinter import ttk, messagebox
-import db.db as db
+import db as db
 from .theme import stripe_treeview, apply_theme, maximize_window, themed_button
 
 

@@ -18,7 +18,7 @@ def get_or_fetch_rate(date_str: str | None) -> Optional[float]:
         date_str = datetime.utcnow().strftime("%Y-%m-%d")
     # Try DB cache first to avoid filesystem and allow centralized cache
     try:
-        import db.db as db
+        import db as db
         cached = db.get_cached_rate(date_str, 'USD', 'TRY')
         if cached and float(cached) > 0:
             return float(cached)
@@ -37,7 +37,7 @@ def get_or_fetch_rate(date_str: str | None) -> Optional[float]:
             if v:
                 try:
                     # Persist into DB cache if available
-                    import db.db as db
+                    import db as db
                     db.set_cached_rate(date_str, 'USD', 'TRY', float(v))
                 except Exception:
                     pass

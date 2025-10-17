@@ -1,8 +1,8 @@
 """Root application entry."""
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, simpledialog
 
-import db.db as db
+import db as db
 from ui.imports_window import open_imports_window
 from ui.view_imports_window import open_view_imports_window
 from ui.view_inventory_window import open_view_inventory_window
@@ -36,17 +36,49 @@ def main():
         maximize_window(root)
     except Exception:
         pass
-    # Ensure base currency is configured on first run. We require an initial base currency to be set
-    # and then make it immutable in settings to preserve historical data integrity.
+    # Ensure base currency is configured on first run. Keep this simple: ask once with a small prompt.
     try:
-        from db.db import get_setting
+        from db import get_setting, set_setting
         if not get_setting('base_currency'):
-            # Simple modal prompt for base currency
-            def ask_base_currency():
-                from ui.settings_window import open_settings_window
-                messagebox.showinfo('Initial Setup', 'Please choose the application base currency. This will be locked for historical consistency.')
-                open_settings_window(root)
-            ask_base_currency()
+            try:
+                # Set classic and themed button colors. Use white bg for classic Button (Cancel)
+                root.option_add('*Button.background', '#1E90FF')
+                root.option_add('*Button.foreground', '#1E90FF')
+                root.option_add('*TButton.background', '#1E90FF')
+                root.option_add('*TButton.foreground', '#1E90FF')
+                
+            except Exception:
+                pass
+            # Minimal modal: Save (themed) + Cancel (white bordered) so Cancel text is visible
+            try:
+                dlg = tk.Toplevel(root); dlg.transient(root); dlg.grab_set()
+                ttk.Label(dlg, text='Enter base currency (e.g. USD):').pack(padx=12, pady=(12,0))
+                e = ttk.Entry(dlg); e.insert(0, 'USD'); e.pack(padx=12, pady=8)
+                def _save():
+                    v = e.get().strip().upper()
+                    if v:
+                        try: set_setting('base_currency', v)
+                        except Exception: pass
+                    try: dlg.destroy()
+                    except Exception: pass
+                def _cancel():
+                    try: dlg.destroy()
+                    except Exception: pass
+                frm = ttk.Frame(dlg); frm.pack(fill='x', padx=12, pady=(0,12))
+                themed_button(frm, text='Save', variant='primary', command=_save).pack(side='left')
+                # Use a small framed Label as a clickable Cancel control so text is always visible on macOS
+                _cf = tk.Frame(frm, bg='white', bd=1, relief='solid')
+                _cl = tk.Label(_cf, text='Cancel', bg='white', fg='#222')
+                _cl.pack(padx=10, pady=6)
+                _cf.pack(side='right', padx=(6,0))
+                _cf.bind('<Button-1>', lambda e: _cancel())
+                _cl.bind('<Button-1>', lambda e: _cancel())
+                dlg.wait_window()
+            except Exception:
+                v = simpledialog.askstring('Initial Setup — Base Currency', 'Enter base currency (e.g. USD):', initialvalue='USD', parent=root)
+                if v:
+                    try: set_setting('base_currency', v.strip().upper())
+                    except Exception: pass
     except Exception:
         pass
 

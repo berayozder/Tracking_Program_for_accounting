@@ -1,6 +1,6 @@
 import tkinter as tk
 from tkinter import ttk, messagebox
-import db.db as db
+import db as db
 
 
 def open_login_dialog(root) -> bool:

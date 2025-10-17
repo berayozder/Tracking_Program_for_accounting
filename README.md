@@ -438,7 +438,7 @@ Tracking_Program_for_accounting/
 **Clear Suggestions:**
 ```python
 # In Python console or script
-import db.db as db
+import db as db
 db.reset_all_tables(clear_product_codes=False)  # Keep codes
 # or
 db.delete_database_file()  # Complete reset

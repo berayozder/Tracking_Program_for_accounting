@@ -2,7 +2,7 @@
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 from datetime import datetime
-import db.db as db
+import db as db
 from .theme import apply_theme, maximize_window, themed_button
 
 

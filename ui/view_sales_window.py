@@ -18,7 +18,7 @@ def read_sales(include_deleted: bool = False):
     """
     # Try DB first for up-to-date data
     try:
-        import db.db as db
+        import db as db
         rows = db.list_sales(include_deleted=include_deleted)  # type: ignore[attr-defined]
         out = []
         for r in rows:
@@ -67,7 +67,7 @@ DESIRED_COLS = ['Date', 'Category', 'Subcategory', 'Quantity', 'SellingPrice', '
 def write_sales(rows):
     # Prefer DB-backed overwrite when available
     try:
-        import db.db as db
+        import db as db
         # Convert CSV-like rows into DB column naming (snake_case)
         db_rows = []
         for r in rows:
@@ -100,7 +100,7 @@ def read_returns():
     Uses DB helper `list_returns()` exclusively. If DB access fails, returns an empty list.
     """
     try:
-        import db.db as db
+        import db as db
         rows = db.list_returns()
         out = []
         for r in rows:
@@ -328,7 +328,7 @@ def open_view_sales_window(root):
     def get_customer_name_mapping():
         """Create mapping from customer ID to customer name."""
         try:
-            import db.db as db
+            import db as db
             customers = db.read_customers()
             return {c.get('customer_id', ''): c.get('name', '') for c in customers}
         except Exception:
@@ -537,7 +537,7 @@ def open_view_sales_window(root):
             messagebox.showinfo('Nothing', 'No matching rows to delete')
             return
         try:
-            import db.db as db
+            import db as db
             db.mark_sale_deleted(ids)
             refresh()
         except Exception:
@@ -561,7 +561,7 @@ def open_view_sales_window(root):
             messagebox.showwarning('Select', 'Select a row first')
             return
         try:
-            import db.db as db
+            import db as db
             rows = db.list_sales(include_deleted=True)
             rec = next((r for r in rows if r.get('id') == idx), None)
         except Exception:
@@ -569,9 +569,20 @@ def open_view_sales_window(root):
         if not rec:
             messagebox.showerror('Error', 'Invalid selection or sale not found')
             return
+        # Helper to read either DB-style (snake_case) or UI-style (TitleCase) keys
+        def _pick(*keys):
+            for k in keys:
+                try:
+                    v = rec.get(k)
+                except Exception:
+                    v = None
+                if v is not None and str(v).strip() != '':
+                    return str(v).strip()
+            return ''
+
         # Prevent duplicate returns for same product id
         existing = { (r.get('ProductID') or '').strip() for r in read_returns() }
-        pid = (rec.get('ProductID') or '').strip()
+        pid = _pick('product_id', 'ProductID')
         if pid in existing:
             if not messagebox.askyesno('Already returned', 'This Product ID already has a return recorded. Record another return anyway?'):
                 return
@@ -597,7 +608,7 @@ def open_view_sales_window(root):
         reason_frame.pack(pady=2)
         # Load suggestions: distinct reasons from DB plus common defaults
         try:
-            import db.db as db
+            import db as db
             db_reasons = db.get_distinct_return_reasons() or []
         except Exception:
             db_reasons = []
@@ -631,7 +642,7 @@ def open_view_sales_window(root):
             val = reason_var.get().strip()
             if val and val not in suggestions:
                 try:
-                    import db.db as db
+                    import db as db
                     db.add_return_reason(val)
                     suggestions.append(val)
                     reason_combo['values'] = suggestions
@@ -682,26 +693,27 @@ def open_view_sales_window(root):
                     else:
                         restock_final = 0
 
-                # Write return directly into DB
-                import db.db as db
+                # Write return directly into DB using normalized keys (support both DB and UI row shapes)
+                import db as db
                 # Use SaleCurrency for refund currency; fallback to default if missing
-                refund_ccy = (rec.get('SaleCurrency') or '').strip().upper()
+                refund_ccy = _pick('sale_currency', 'SaleCurrency') or ''
                 if not refund_ccy:
                     try:
                         refund_ccy = db.get_default_sale_currency()
                     except Exception:
                         refund_ccy = ''
-                # Build fields and insert
+
+                # Build fields and insert using the normalized pick helper
                 res = db.insert_return({
                     'return_date': d,
                     'product_id': pid,
-                    'sale_date': rec.get('Date',''),
-                    'category': rec.get('Category',''),
-                    'subcategory': rec.get('Subcategory',''),
-                        'unit_price': rec.get('SellingPrice',''),
-                    'selling_price': rec.get('SellingPrice',''),
-                    'platform': rec.get('Platform',''),
-                    'refund_amount': refund,
+                    'sale_date': _pick('date', 'Date', 'sale_date', 'SaleDate'),
+                    'category': _pick('category', 'Category'),
+                    'subcategory': _pick('subcategory', 'Subcategory'),
+                    'unit_price': _pick('selling_price', 'SellingPrice', 'unit_price', 'UnitPrice'),
+                    'selling_price': _pick('selling_price', 'SellingPrice', 'unit_price', 'UnitPrice'),
+                    'platform': _pick('platform', 'Platform'),
+                    'refund_amount': float(refund),
                     'refund_currency': refund_ccy,
                     'restock': restock_final,
                     'reason': reason_var.get().strip(),
@@ -740,7 +752,7 @@ def open_view_sales_window(root):
             messagebox.showwarning('Select', 'Select a row first')
             return
         try:
-            import db.db as db
+            import db as db
             rows = db.list_sales(include_deleted=True)
             rec = next((r for r in rows if r.get('id') == idx), None)
         except Exception:
@@ -834,7 +846,7 @@ def open_view_sales_window(root):
 
             # Persist changes via DB helper
             try:
-                import db.db as db
+                import db as db
                 db.update_sale(idx, {
                     'date': d,
                     'category': cat,
@@ -977,7 +989,7 @@ def open_view_sales_window(root):
         def save_and_close():
             # Prefer DB update
             try:
-                import db.db as db
+                import db as db
                 db.update_sale(idx, {'document_path': format_docs(docs)})
             except Exception:
                 rows2 = read_sales()
@@ -1028,7 +1040,7 @@ def open_view_sales_window(root):
             return
         
         try:
-            import db.db as db
+            import db as db
             rows = db.list_sales(include_deleted=True)
             rec = next((r for r in rows if r.get('id') == idx), None)
         except Exception:
@@ -1041,7 +1053,7 @@ def open_view_sales_window(root):
             messagebox.showwarning('No Product ID', 'This sale has no Product ID')
             return
         try:
-            import db.db as db
+            import db as db
             allocations = db.get_sale_batch_info(product_id)
             show_batch_info_dialog(product_id, allocations)
         except Exception as e:
@@ -1164,7 +1176,7 @@ def open_view_sales_window(root):
             messagebox.showinfo('Nothing', 'No matching rows to undelete')
             return
         try:
-            import db.db as db
+            import db as db
             db.undelete_sales_by_ids(ids)
             refresh()
         except Exception as e:
