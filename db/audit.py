@@ -1,13 +1,13 @@
 import logging
 from typing import List, Optional, Dict
-from .connection import get_conn
+from .connection import get_conn,get_cursor
 from .auth import _CURRENT_USER
 
 # Configure logging for this module
 logger = logging.getLogger(__name__)
 
 
-def write_audit(action: str, entity: str, ref_id: Optional[str] = None, details: str = "") -> None:
+def write_audit(action: str, entity: str, ref_id: Optional[str] = None, details: str = "", cur = None) -> None:
     """
     Write an audit log entry.
 
@@ -19,11 +19,17 @@ def write_audit(action: str, entity: str, ref_id: Optional[str] = None, details:
     """
     ref_id = str(ref_id) if ref_id else ""
     try:
-        with get_conn() as conn:
-            conn.execute(
+        if cur:
+            cur.execute(
                 "INSERT INTO audit_log (user, action, entity, ref_id, details) VALUES (?, ?, ?, ?, ?)",
                 (_CURRENT_USER.get("username"), action, entity, ref_id, details),
             )
+        else:
+            with get_cursor() as (conn, cur):
+                cur.execute(
+                    "INSERT INTO audit_log (user, action, entity, ref_id, details) VALUES (?, ?, ?, ?, ?)",
+                    (_CURRENT_USER.get("username"), action, entity, ref_id, details),
+                )
     except Exception as e:
         logger.error("Failed to write audit log: %s", e)
 
