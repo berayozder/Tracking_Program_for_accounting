@@ -62,7 +62,8 @@ def open_backup_window(root):
             stamp = datetime.now().strftime('%Y%m%d-%H%M%S')
             dest = BACKUP_DIR / f"app-{stamp}.db"
             shutil.copy2(db.DB_PATH, dest)
-            db.write_audit('backup', 'database', str(dest), f"Backup created: {dest}")
+            with db.get_cursor() as (conn, cur):
+                db.write_audit('backup', 'database', str(dest), f"Backup created: {dest}", cur=cur)
             messagebox.showinfo('Backup', f'Backup created at:\n{dest}')
         except Exception as e:
             messagebox.showerror('Backup', f'Failed to backup: {e}')
@@ -89,7 +90,8 @@ def open_backup_window(root):
                 shutil.copy2(db.DB_PATH, current_backup)
             # copy chosen file to DB path
             shutil.copy2(path, db.DB_PATH)
-            db.write_audit('restore', 'database', str(path), f"Restored from: {path}")
+            with db.get_cursor() as (conn, cur):
+                db.write_audit('restore', 'database', str(path), f"Restored from: {path}", cur=cur)
             messagebox.showinfo('Restore', 'Restore complete. Please restart the application.')
         except Exception as e:
             messagebox.showerror('Restore', f'Failed to restore: {e}')

@@ -5,18 +5,12 @@ import db as db
 
 def _rows_for_table(table: str, extra_where: str = ''):
     try:
-        conn = db.get_conn()
-        cur = conn.cursor()
-        q = f"SELECT * FROM {table} WHERE (deleted IS NOT NULL AND deleted=1) OR (voided IS NOT NULL AND voided=1) {extra_where} ORDER BY id DESC LIMIT 500"
-        cur.execute(q)
-        rows = [dict(r) for r in cur.fetchall()]
-        conn.close()
-        return rows
+        with db.get_cursor() as (conn, cur):
+            q = f"SELECT * FROM {table} WHERE (deleted IS NOT NULL AND deleted=1) OR (voided IS NOT NULL AND voided=1) {extra_where} ORDER BY id DESC LIMIT 500"
+            cur.execute(q)
+            rows = [dict(r) for r in cur.fetchall()]
+            return rows
     except Exception:
-        try:
-            conn.close()
-        except Exception:
-            pass
         return []
 
 
@@ -107,15 +101,12 @@ def open_trash_window(root):
                     # will raise if not admin
                     messagebox.showerror('Permission', 'Admin permission required to purge')
                     return
-                conn = db.get_conn()
-                cur = conn.cursor()
-                cur.execute(f'DELETE FROM {t} WHERE id=?', (rid,))
-                conn.commit()
-                conn.close()
-                try:
-                    db.write_audit('purge', t, str(rid), 'purged via trash UI')
-                except Exception:
-                    pass
+                with db.get_cursor() as (conn, cur):
+                    cur.execute(f'DELETE FROM {t} WHERE id=?', (rid,))
+                    try:
+                        db.write_audit('purge', t, str(rid), 'purged via trash UI', cur=cur)
+                    except Exception:
+                        pass
                 messagebox.showinfo('Purge', 'Deleted')
                 _refresh(t)
             except Exception as e:

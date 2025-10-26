@@ -1,4 +1,5 @@
 import logging
+from typing import Optional, List, Dict
 from .connection import get_cursor
 from .suppliers_dao import find_or_create_supplier
 from .settings import get_default_import_currency, get_base_currency
@@ -20,8 +21,8 @@ def add_import(
     category: str,
     subcategory: str,
     currency: str = 'TRY',
-    fx_override: float | None = None,
-    lines: list[dict] | None = None,
+    fx_override: Optional[float] = None,
+    lines: Optional[List[Dict]] = None,
     total_import_expenses: float = 0.0,
     include_expenses: bool = False
 ) -> None:
@@ -149,7 +150,7 @@ def add_import(
             raise
         try:
             print("[DEBUG] About to call write_audit:", write_audit)
-            write_audit('add', 'import', str(import_id), f"qty={quantity}; price={ordered_price}")
+            write_audit('add', 'import', str(import_id), f"qty={quantity}; price={ordered_price}", cur=cur)
             print(f"[DEBUG] Wrote audit log for import id: {import_id}")
         except Exception as e:
             print(f"[ERROR] Failed to write audit log: {e}")
@@ -161,8 +162,8 @@ def _compute_cost_base(
     order_date: str,
     unit_cost_ccy: float,
     ccy: str,
-    fx_override_val: float | None = None
-) -> tuple[float, float, float | None]:
+    fx_override_val: Optional[float] = None
+) -> tuple[float, float, Optional[float]]:
     """
     Compute the unit cost in import and base currency, and the FX rate to base.
     Returns (unit_cost_in_import_ccy, unit_cost_in_base, fx_to_base).
@@ -204,10 +205,10 @@ def create_import_batch(
     supplier: str,
     notes: str = "",
     currency: str = 'TRY',
-    fx_to_base: float | None = None,
-    unit_cost_base: float | None = None,
-    unit_cost_orig: float | None = None,
-    import_line_id: int | None = None,
+    fx_to_base: Optional[float] = None,
+    unit_cost_base: Optional[float] = None,
+    unit_cost_orig: Optional[float] = None,
+    import_line_id: Optional[int] = None,
     cur=None
 ) -> int:
     """
@@ -252,7 +253,7 @@ def _insert_line(
     qty: float,
     date: str,
     cur_ccy: str,
-    fx_override: float | None,
+    fx_override: Optional[float],
     supplier: str,
     notes: str
 ) -> None:
@@ -273,7 +274,7 @@ def _insert_line(
     update_inventory(cat, sub, qty, cur=cur)
 
 
-def get_imports(limit: int = 500) -> list[dict]:
+def get_imports(limit: int = 500) -> List[Dict]:
     """
     Return a list of recent imports (active or all), decrypting notes.
     """
@@ -294,7 +295,7 @@ def get_imports(limit: int = 500) -> list[dict]:
     return rows
 
 
-def get_imports_with_lines(limit: int = 500) -> list[dict]:
+def get_imports_with_lines(limit: int = 500) -> List[Dict]:
     """
     Return a list of imports, each with a 'lines' key containing an array of lines.
     """
@@ -339,8 +340,8 @@ def edit_import(
     notes: str,
     category: str,
     subcategory: str,
-    currency: str | None = None,
-    fx_override: float | None = None,
+    currency: Optional[str] = None,
+    fx_override: Optional[float] = None,
     total_import_expenses: float = 0.0,
     include_expenses: bool = False
 ) -> None:
@@ -385,7 +386,7 @@ def delete_import(import_id: int) -> None:
     with get_cursor() as (conn, cur):
         rebuild_inventory_from_imports(cur)
     
-    write_audit('delete', 'import', str(import_id), 'soft-deleted')
+    write_audit('delete', 'import', str(import_id), 'soft-deleted', cur=cur)
 
 
 def undelete_import(import_id: int) -> None:
@@ -404,14 +405,14 @@ def undelete_import(import_id: int) -> None:
     with get_cursor() as (conn, cur):
         rebuild_inventory_from_imports(cur)
     
-    write_audit('undelete', 'import', str(import_id))
+    write_audit('undelete', 'import', str(import_id), cur=cur)
 
 
 def get_available_batches(
     category: str,
-    subcategory: str | None = None,
+    subcategory: Optional[str] = None,
     order_by_date: bool = True
-) -> list[dict]:
+) -> List[Dict]:
     """
     Return available import batches for a category/subcategory, ordered by date.
     """
@@ -449,7 +450,7 @@ def allocate_sale_to_batches(
     subcategory: str,
     quantity: float,
     unit_sale_price_base: float
-) -> list[dict]:
+) -> List[Dict]:
     """
     Allocate a sale to available import batches, update inventory, and record allocations.
     Returns a list of allocation details.
@@ -573,7 +574,7 @@ def undelete_allocation(allocation_id: int) -> bool:
         return False
 
 
-def get_sale_batch_info(product_id: int) -> list[dict]:
+def get_sale_batch_info(product_id: int) -> List[Dict]:
     """
     Return batch allocation info for a given product_id.
     """
@@ -605,7 +606,7 @@ def get_sale_batch_info(product_id: int) -> list[dict]:
 def handle_return_batch_allocation(
     product_id: int,
     restock_quantity: float = 1.0
-) -> list[dict]:
+) -> List[Dict]:
     """
     Handle restocking inventory by reversing sale batch allocations for returns.
     Returns a list of batches updated.
@@ -692,3 +693,99 @@ def migrate_existing_imports_to_batches() -> int:
             )
 
     return len(unmigrated_imports)
+
+def recompute_import_batches(import_id: int):
+    """
+    Recompute unit_cost and unit_cost_base for batches of a given import_id using import_lines and expenses.
+    """
+    from .connection import get_cursor
+
+    print(f"[DEBUG] recompute_import_batches called with import_id={import_id}")
+    with get_cursor() as (conn, cur):
+        # --- Load import ---
+        cur.execute('SELECT total_import_expenses, include_expenses, currency, date FROM imports WHERE id=?', (import_id,))
+        imp = cur.fetchone()
+        if not imp:
+            print(f"[DEBUG] No import found for id={import_id}")
+            return
+        imp = dict(imp)
+        print(f"[DEBUG] Loaded import: {imp}")
+        include_flag = bool(int(imp.get('include_expenses') or 0))
+        imp_currency = (imp.get('currency') or get_default_import_currency() or 'USD').upper()
+        imp_date = imp.get('date')
+
+        # --- Sum linked expenses ---
+        total_expenses = 0.0
+        try:
+            cur.execute('''SELECT e.id, e.date, e.amount, e.currency, COALESCE(e.deleted,0) as deleted 
+                           FROM expenses e
+                           JOIN expense_import_links l ON l.expense_id = e.id 
+                           WHERE l.import_id = ?''', (import_id,))
+            linked_sum = 0.0
+            for er in cur.fetchall():
+                er = dict(er)
+                if int(er.get('deleted',0)) == 1:
+                    continue
+                amt = float_or_none(er.get('amount')) or 0.0
+                exp_ccy = (er.get('currency') or '').upper() or imp_currency
+                exp_date = er.get('date') or imp_date
+                if exp_ccy != imp_currency:
+                    conv = convert_amount(exp_date, amt, exp_ccy, imp_currency)
+                    amt = float(conv) if conv is not None else amt
+                linked_sum += amt
+            total_expenses = linked_sum if linked_sum > 0 else float(imp.get('total_import_expenses') or 0.0)
+            print(f"[DEBUG] total_expenses for import_id={import_id}: {total_expenses}")
+        except Exception as e:
+            print(f"[DEBUG] Exception summing linked expenses: {e}")
+            total_expenses = float(imp.get('total_import_expenses') or 0.0)
+
+        # --- Load lines ---
+        cur.execute('SELECT id, category, subcategory, ordered_price, quantity FROM import_lines WHERE import_id=?', (import_id,))
+        lines = [dict(r) for r in cur.fetchall()]
+        print(f"[DEBUG] Loaded lines for import_id={import_id}: {lines}")
+        if not lines:
+            print(f"[DEBUG] No lines found for import_id={import_id}")
+            return
+
+        total_order_value = sum(float(l.get('ordered_price') or 0) * float(l.get('quantity') or 0) for l in lines)
+        print(f"[DEBUG] total_order_value for import_id={import_id}: {total_order_value}")
+        apply_allocation = include_flag or (total_expenses > 0)
+
+        # --- Recompute batches ---
+        for l in lines:
+            lid = l['id']
+            unit_price = float(l.get('ordered_price') or 0.0)
+            qty = float(l.get('quantity') or 0.0)
+            line_total = unit_price * qty
+            adjusted_price = unit_price
+            if apply_allocation and total_order_value > 0 and qty > 0:
+                share = line_total / total_order_value
+                adjusted_price = unit_price + (total_expenses * share) / qty
+            print(f"[DEBUG] Line {lid}: unit_price={unit_price}, qty={qty}, adjusted_price={adjusted_price}")
+
+            # --- Base currency ---
+            unit_cost_base = adjusted_price
+            base_ccy = get_base_currency()
+            try:
+                if imp_currency != base_ccy and imp_date:
+                    conv = convert_amount(imp_date, adjusted_price, imp_currency, base_ccy)
+                    if conv is not None:
+                        unit_cost_base = float(conv)
+            except Exception as e:
+                print(f"[DEBUG] Exception converting to base currency: {e}")
+
+            # --- Update batches ---
+            cur.execute('SELECT id FROM import_batches WHERE import_line_id=? AND import_id=?', (lid, import_id))
+            bids = [r['id'] for r in cur.fetchall()]
+            if not bids:
+                cur.execute('SELECT id FROM import_batches WHERE import_id=? AND category=? AND subcategory=?', (import_id, l.get('category'), l.get('subcategory')))
+                bids = [r['id'] for r in cur.fetchall()]
+
+            for bid in bids:
+                cur.execute('''
+                    UPDATE import_batches 
+                    SET unit_cost=?, unit_cost_base=?, unit_cost_orig = COALESCE(unit_cost_orig, ?)
+                    WHERE id=?''', (adjusted_price, unit_cost_base, unit_price, bid))
+                print(f"[DEBUG] Updated batch {bid}: unit_cost={adjusted_price}, unit_cost_base={unit_cost_base}, unit_cost_orig={unit_price}")
+        conn.commit()
+        print(f"[DEBUG] Finished recompute_import_batches for import_id={import_id}")

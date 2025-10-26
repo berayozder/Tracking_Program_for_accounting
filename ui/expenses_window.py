@@ -29,7 +29,7 @@ def open_expenses_window(root):
     canvas = tk.Canvas(content_container, highlightthickness=0)
     scroll_y = ttk.Scrollbar(content_container, orient='vertical', command=canvas.yview)
     inner_frame = ttk.Frame(canvas)
-    inner_frame.bind('<Configure>', lambda e: canvas.configure(scrollregion=canvas.bbox('all')))
+    inner_frame.bind('<Configure>', lambda e, c=canvas: c.configure(scrollregion=c.bbox('all')))
     canvas.create_window((0,0), window=inner_frame, anchor='nw')
     canvas.configure(yscrollcommand=scroll_y.set)
     canvas.pack(side=tk.LEFT, fill='both', expand=True)
@@ -177,7 +177,7 @@ def open_expenses_window(root):
         canvas = tk.Canvas(imports_frame, height=canvas_height, highlightthickness=0)
         sb = ttk.Scrollbar(imports_frame, orient='vertical', command=canvas.yview)
         inner = ttk.Frame(canvas)
-        inner.bind('<Configure>', lambda e: canvas.configure(scrollregion=canvas.bbox('all')))
+        inner.bind('<Configure>', lambda e, c=canvas: c.configure(scrollregion=c.bbox('all')))
         canvas.create_window((0,0), window=inner, anchor='nw')
         canvas.configure(yscrollcommand=sb.set)
         canvas.pack(side=tk.LEFT, fill='both', expand=True)
@@ -321,10 +321,12 @@ def open_expenses_window(root):
         notes = notes_entry.get().strip()
 
         try:
+            print("[DEBUG] About to call db.add_expense")
             db.add_expense(d, amt, is_imp, None, cat, notes, document_path=document_path, import_ids=selected_import_ids, currency=expense_ccy_var.get())
             messagebox.showinfo('Saved', 'Expense saved')
             window.destroy()
         except Exception as e:
+            print(f"[DEBUG] Exception in save_expense: {e}")
             messagebox.showerror('Error', f'Failed to save expense: {e}')
 
     is_import_var.trace_add('write', lambda *a: on_import_toggle())

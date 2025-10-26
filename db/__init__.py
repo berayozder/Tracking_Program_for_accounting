@@ -208,7 +208,7 @@ try:
                             undelete_allocation,
                             get_sale_batch_info, 
                             handle_return_batch_allocation,
-                            migrate_existing_imports_to_batches)
+                            migrate_existing_imports_to_batches,recompute_import_batches)
 except Exception as e:
     print("[IMPORT ERROR] Failed to import from imports_dao:", e)
     add_import = None  # type: ignore
@@ -227,7 +227,7 @@ except Exception as e:
     handle_return_batch_allocation = None  # type: ignore
     migrate_existing_imports_to_batches = None  # type: ignore
 else:
-    __all__.extend(["add_import","create_import_batch","get_imports","get_imports_with_lines","edit_import","delete_import","undelete_import","get_available_batches","allocate_sale_to_batches","backfill_allocation_unit_costs","undelete_allocation","get_sale_batch_info","handle_return_batch_allocation","migrate_existing_imports_to_batches"])
+    __all__.extend(["add_import","create_import_batch","get_imports","get_imports_with_lines","edit_import","delete_import","undelete_import","get_available_batches","allocate_sale_to_batches","backfill_allocation_unit_costs","undelete_allocation","get_sale_batch_info","handle_return_batch_allocation","migrate_existing_imports_to_batches","recompute_import_batches"])
 
 
 # Analytics helpers (export safe wrappers so callers can use db.<name>)
