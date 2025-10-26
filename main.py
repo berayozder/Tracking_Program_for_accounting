@@ -21,6 +21,7 @@ from ui.login_window import open_login_dialog
 from ui.audit_log_window import open_audit_log_window
 from ui.backup_window import open_backup_window
 from ui.settings_window import open_settings_window
+from ui.trash_window import open_trash_window
 
 
 def main():
@@ -39,7 +40,12 @@ def main():
     # Ensure base currency is configured on first run. Keep this simple: ask once with a small prompt.
     try:
         from db import get_setting, set_setting
-        if not get_setting('base_currency'):
+        # Only prompt if base_currency is not defined or is an empty string
+        try:
+            _base = get_setting('base_currency')
+        except Exception:
+            _base = None
+        if not _base or not str(_base).strip():
             try:
                 # Set classic and themed button colors. Use white bg for classic Button (Cancel)
                 root.option_add('*Button.background', '#1E90FF')
@@ -231,6 +237,7 @@ def main():
     themed_button(admin_btns, text='📈 Monthly/Yearly', variant='secondary', width=HOME_BTN_WIDTH, command=lambda: open_monthly_yearly_analytics_window(root)).pack(side='left', padx=6)
     themed_button(admin_btns, text='Audit Log', variant='secondary', width=HOME_BTN_WIDTH, command=lambda: open_audit_log_window(root)).pack(side='left', padx=6)
     themed_button(admin_btns, text='Backup/Restore', variant='secondary', width=HOME_BTN_WIDTH, command=lambda: open_backup_window(root)).pack(side='left', padx=6)
+    themed_button(admin_btns, text='🗑️ Trash', variant='secondary', width=HOME_BTN_WIDTH, command=lambda: open_trash_window(root)).pack(side='left', padx=6)
 
     root.mainloop()
 

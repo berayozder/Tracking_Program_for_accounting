@@ -12,7 +12,11 @@ def ensure_db():
 
 
 def open_imports_window(root):
+
     ensure_db()
+    # Debug: Check DAO function availability
+    print("db.add_import:", getattr(db, 'add_import', None))
+    print("db.get_imports:", getattr(db, 'get_imports', None))
 
     window = tk.Toplevel(root)
     window.title("Record Import")
@@ -614,6 +618,9 @@ def open_imports_window(root):
             else:
                 db.add_import(row_date, price, qty, supplier, notes, category, subcategory, cur, fx_override_val)
         except Exception as e:
+            import traceback
+            print("[ERROR] Exception in save_import:")
+            traceback.print_exc()
             messagebox.showerror("Error", f"Failed to save import: {e}")
             return
         # We no longer update products by product name; imports only record the category/subcategory.

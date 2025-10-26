@@ -16,14 +16,15 @@ __all__ = []
 
 # Connection helpers
 try:
-	from .connection import get_conn, init_db, DB_PATH  # type: ignore
+	from .connection import get_conn, init_db, DB_PATH,get_cursor # type: ignore
 except Exception:
 	# keep package importable even if module isn't present yet
 	get_conn = None  # type: ignore
 	init_db = None  # type: ignore
 	DB_PATH = None  # type: ignore
+	get_cursor = None  # type: ignore
 else:
-	__all__.extend(["get_conn", "init_db", "DB_PATH"])
+	__all__.extend(["get_conn", "init_db", "DB_PATH", "get_cursor"])
 
 # Settings helpers
 try:
@@ -46,61 +47,6 @@ else:
 		"get_default_sale_currency",
 		"get_default_expense_currency",
 	])
-
-# Import-related DAO helpers (batches, allocations, returns)
-try:
-    from .imports_dao import (
-        add_import,
-        create_import_batch,
-        get_imports,
-        get_imports_with_lines,
-        edit_import,
-        recompute_import_batches,
-        delete_import,
-        undelete_import,
-        get_available_batches,
-        allocate_sale_to_batches,
-        backfill_allocation_unit_costs,
-        undelete_allocation,
-        get_sale_batch_info,
-        handle_return_batch_allocation,
-        migrate_existing_imports_to_batches,
-    )  # type: ignore
-except Exception:
-    add_import = None  # type: ignore
-    create_import_batch = None  # type: ignore
-    get_imports = None  # type: ignore
-    get_imports_with_lines = None  # type: ignore
-    edit_import = None  # type: ignore
-    recompute_import_batches = None  # type: ignore
-    delete_import = None  # type: ignore
-    undelete_import = None  # type: ignore
-    get_available_batches = None  # type: ignore
-    allocate_sale_to_batches = None  # type: ignore
-    backfill_allocation_unit_costs = None  # type: ignore
-    undelete_allocation = None  # type: ignore
-    get_sale_batch_info = None  # type: ignore
-    handle_return_batch_allocation = None  # type: ignore
-    migrate_existing_imports_to_batches = None  # type: ignore
-else:
-    __all__.extend([
-        "add_import",
-        "create_import_batch",
-        "get_imports",
-        "get_imports_with_lines",
-        "edit_import",
-        "recompute_import_batches",
-        "delete_import",
-        "undelete_import",
-        "get_available_batches",
-        "allocate_sale_to_batches",
-        "backfill_allocation_unit_costs",
-        "undelete_allocation",
-        "get_sale_batch_info",
-        "handle_return_batch_allocation",
-        "migrate_existing_imports_to_batches",
-    ])
-    
     
 # Audit and crypto helpers
 try:
@@ -159,6 +105,25 @@ except Exception:
 else:
     __all__.extend(["list_sales","add_sale","overwrite_sales","get_distinct_sale_platforms","undelete_sales_by_ids","undelete_sales_by_indices","mark_sale_deleted","update_sale"])
 
+try: 
+    from .schema import init_db_schema,add_column_if_missing
+except Exception:
+    init_db_schema = None  # type: ignore
+    add_column_if_missing = None  # type: ignore
+else:
+    __all__.extend(["init_db_schema", "add_column_if_missing"])
+
+
+try:
+    from .soft_delete import (soft_delete_entity, restore_entity, void_transaction, void_sale)
+except Exception:
+    soft_delete_entity = None
+    restore_entity = None
+    void_transaction = None
+    void_sale = None
+else:
+    __all__.extend(["soft_delete_entity", "restore_entity", "void_transaction", "void_sale"])
+
 
 try:
     from .expenses_dao import (add_expense, 
@@ -209,8 +174,9 @@ else:
     __all__.extend(["get_cached_rate", "set_cached_rate", "convert_amount", "_get_rate_generic", "get_rate_to_base"])
 
 try:
-    from .product_codes_dao import get_product_code,set_product_code,get_cat_code_for_category,generate_product_ids,get_all_product_codes,update_next_serial,delete_product_code
-except Exception:
+    from .product_codes_dao import get_product_code, set_product_code, get_cat_code_for_category, generate_product_ids, get_all_product_codes, update_next_serial, delete_product_code
+    __all__.extend(["get_product_code","set_product_code","get_cat_code_for_category","generate_product_ids","get_all_product_codes","update_next_serial","delete_product_code"])
+except Exception as e:
     get_product_code = None  # type: ignore
     set_product_code = None  # type: ignore
     get_cat_code_for_category = None  # type: ignore
@@ -218,8 +184,6 @@ except Exception:
     get_all_product_codes = None  # type: ignore
     update_next_serial = None  # type: ignore
     delete_product_code = None  # type: ignore
-else:
-    __all__.extend(["get_product_code","set_product_code","get_cat_code_for_category","generate_product_ids","get_all_product_codes","update_next_serial","delete_product_code"])
 
 try:
     from .inventory_dao import get_inventory,rebuild_inventory_from_imports,update_inventory
@@ -237,7 +201,6 @@ try:
                             create_import_batch,
                             get_imports,get_imports_with_lines,
                             edit_import,
-                            recompute_import_batches,
                             delete_import,undelete_import,
                             get_available_batches,
                             allocate_sale_to_batches,
@@ -246,7 +209,8 @@ try:
                             get_sale_batch_info, 
                             handle_return_batch_allocation,
                             migrate_existing_imports_to_batches)
-except Exception:
+except Exception as e:
+    print("[IMPORT ERROR] Failed to import from imports_dao:", e)
     add_import = None  # type: ignore
     create_import_batch = None  # type: ignore
     get_imports = None  # type: ignore
@@ -263,7 +227,7 @@ except Exception:
     handle_return_batch_allocation = None  # type: ignore
     migrate_existing_imports_to_batches = None  # type: ignore
 else:
-    __all__.extend(["add_import","create_import_batch","get_imports_with_lines","edit_import","recompute_import_batches","delete_import","undelete_import","get_available_batches","allocate_sale_to_batches","backfill_allocation_unit_costs","undelete_allocation","get_sale_batch_info","handle_return_batch_allocation","migrate_existing_imports_to_batches"])
+    __all__.extend(["add_import","create_import_batch","get_imports","get_imports_with_lines","edit_import","delete_import","undelete_import","get_available_batches","allocate_sale_to_batches","backfill_allocation_unit_costs","undelete_allocation","get_sale_batch_info","handle_return_batch_allocation","migrate_existing_imports_to_batches"])
 
 
 # Analytics helpers (export safe wrappers so callers can use db.<name>)

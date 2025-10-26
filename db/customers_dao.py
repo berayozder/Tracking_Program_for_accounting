@@ -2,17 +2,30 @@ from .connection import get_conn
 from datetime import datetime
 
 # ---------------- CUSTOMER MANAGEMENT ----------------
+
+def _row_to_dict(row, cols):
+    """Convert a DB row (sqlite3.Row or tuple) to dict given column names."""
+    if row is None:
+        return None
+    if hasattr(row, "keys"):
+        # sqlite3.Row or mapping-like
+        return {k: row[k] for k in row.keys()}
+    # tuple/list -> map by provided cols
+    return {cols[i]: row[i] for i in range(min(len(cols), len(row)))}
+
+
 def get_next_customer_id():
     try:
         conn = get_conn()
         cur = conn.cursor()
         cur.execute("SELECT customer_id FROM customers ORDER BY id DESC LIMIT 1")
         row = cur.fetchone()
-        conn.close()
+        # normalize result retrieval
         if not row:
             return "CUST001"
-        last = row[0] if isinstance(row, (list, tuple)) else row['customer_id'] if hasattr(row, 'keys') else str(row)
-        if not last or not last.startswith('CUST'):
+        # row may be tuple or sqlite3.Row; prefer first column value
+        last = row[0] if isinstance(row, (list, tuple)) or (hasattr(row, "__getitem__") and not hasattr(row, "keys")) else (row['customer_id'] if hasattr(row, 'keys') and 'customer_id' in row.keys() else None)
+        if not last or not isinstance(last, str) or not last.startswith('CUST'):
             return "CUST001"
         try:
             num = int(last[4:])
@@ -21,6 +34,11 @@ def get_next_customer_id():
             return "CUST001"
     except Exception:
         return "CUST001"
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 
 def add_customer(name, email='', phone='', address='', notes=''):
@@ -34,32 +52,38 @@ def add_customer(name, email='', phone='', address='', notes=''):
             VALUES (?,?,?,?,?,?,?)
         ''', (cid, name.strip(), email.strip(), phone.strip(), address.strip(), notes.strip(), created_date))
         conn.commit()
-        conn.close()
         return cid
     except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return None
+    finally:
         try:
             conn.close()
         except Exception:
             pass
-        return None
 
 
 def read_customers():
+    cols = ['customer_id', 'name', 'email', 'phone', 'address', 'notes', 'created_date']
     try:
         conn = get_conn()
         cur = conn.cursor()
         cur.execute('SELECT customer_id, name, email, phone, address, notes, created_date FROM customers ORDER BY id DESC')
         rows = cur.fetchall()
-        conn.close()
         out = []
         for r in rows:
-            if hasattr(r, 'keys'):
-                out.append({k: r[k] for k in r.keys()})
-            else:
-                out.append(dict(r))
+            out.append(_row_to_dict(r, cols))
         return out
     except Exception:
         return []
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 
 def write_customers(customers):
@@ -73,11 +97,16 @@ def write_customers(customers):
                 INSERT INTO customers(customer_id, name, email, phone, address, notes, created_date)
                 VALUES (?,?,?,?,?,?,?)
             ''', (
-                c.get('customer_id'), c.get('name'), c.get('email'), c.get('phone'), c.get('address'), c.get('notes'), c.get('created_date')
+                c.get('customer_id'), c.get('name'), c.get('email'),
+                c.get('phone'), c.get('address'), c.get('notes'), c.get('created_date')
             ))
         conn.commit()
-        conn.close()
     except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+    finally:
         try:
             conn.close()
         except Exception:
@@ -88,39 +117,44 @@ def find_customer_by_name(name):
     name_lower = (name or '').lower().strip()
     if not name_lower:
         return []
+    cols = ['customer_id', 'name', 'email', 'phone', 'address', 'notes', 'created_date']
     try:
         conn = get_conn()
         cur = conn.cursor()
         cur.execute('SELECT customer_id, name, email, phone, address, notes, created_date FROM customers WHERE LOWER(name) LIKE ? LIMIT 50', (f'%{name_lower}%',))
         rows = cur.fetchall()
-        conn.close()
         out = []
         for r in rows:
-            if hasattr(r, 'keys'):
-                out.append({k: r[k] for k in r.keys()})
-            else:
-                out.append(dict(r))
+            out.append(_row_to_dict(r, cols))
         return out
     except Exception:
         return []
-        if customer.get('name', '').lower().strip() == name_lower:
-            return customer
-    return None
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 
 def find_or_create_customer(name):
     if not name or not name.strip():
         return None
-    existing = find_customer_by_name(name.strip())
+    search_name = name.strip()
+    existing = find_customer_by_name(search_name)
     if existing:
-        return existing['customer_id']
-    return add_customer(name.strip())
+        # return the first matching customer's customer_id
+        first = existing[0]
+        if isinstance(first, dict):
+            return first.get('customer_id')
+    return add_customer(search_name)
 
 
 def get_customer_name_suggestions():
     customers = read_customers()
     names = []
     for customer in customers:
+        if not customer:
+            continue
         name = customer.get('name', '').strip()
         if name:
             names.append(name)
@@ -129,8 +163,11 @@ def get_customer_name_suggestions():
 
 def edit_customer(customer_id, name='', email='', phone='', address='', notes=''):
     customers = read_customers()
+    target_id = (customer_id or '').strip()
+    if not target_id:
+        return False
     for i, customer in enumerate(customers):
-        if customer.get('customer_id', '').strip() == customer_id.strip():
+        if (customer.get('customer_id') or '').strip() == target_id:
             customers[i].update({
                 'name': name.strip() if name else customer.get('name', ''),
                 'email': email.strip() if email else customer.get('email', ''),
@@ -145,8 +182,11 @@ def edit_customer(customer_id, name='', email='', phone='', address='', notes=''
 
 def delete_customer(customer_id):
     customers = read_customers()
+    target_id = (customer_id or '').strip()
+    if not target_id:
+        return False
     original_count = len(customers)
-    customers = [c for c in customers if c.get('customer_id', '').strip() != customer_id.strip()]
+    customers = [c for c in customers if (c.get('customer_id') or '').strip() != target_id]
     if len(customers) < original_count:
         write_customers(customers)
         return True
@@ -158,19 +198,24 @@ def get_customer_sales_summary(customer_id):
         conn = get_conn()
         cur = conn.cursor()
         cur.execute('SELECT * FROM sales WHERE customer_id=? AND (deleted IS NULL OR deleted=0) ORDER BY datetime(date) DESC', (customer_id.strip(),))
-        rows = [dict(r) for r in cur.fetchall()]
-        conn.close()
+        rows = cur.fetchall()
+        sales_rows = [dict(r) if hasattr(r, 'keys') else dict(r) for r in rows]
         total_revenue = 0.0
-        for row in rows:
+        for row in sales_rows:
             try:
                 total_revenue += float(row.get('selling_price') or row.get('SellingPrice') or 0)
             except Exception:
                 pass
         return {
-            'total_sales': len(rows),
+            'total_sales': len(sales_rows),
             'total_revenue': total_revenue,
-            'sales_count': len(rows),
-            'recent_sales': rows[:10]
+            'sales_count': len(sales_rows),
+            'recent_sales': sales_rows[:10]
         }
     except Exception:
         return {'total_sales': 0, 'total_revenue': 0.0, 'sales_count': 0, 'recent_sales': []}
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass

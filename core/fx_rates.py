@@ -4,6 +4,7 @@ from datetime import datetime
 from typing import Optional
 import urllib.request
 import json
+import core.fx_cache as fx_cache
 
 
 def get_or_fetch_rate(date_str: str | None) -> Optional[float]:
@@ -16,15 +17,26 @@ def get_or_fetch_rate(date_str: str | None) -> Optional[float]:
     """
     if not date_str:
         date_str = datetime.utcnow().strftime("%Y-%m-%d")
-    # Try DB cache first to avoid filesystem and allow centralized cache
+    # Try in-memory/file cache first (fast)
     try:
-        import db as db
-        cached = db.get_cached_rate(date_str, 'USD', 'TRY')
+        cached = fx_cache.get(date_str, 'USD', 'TRY')
         if cached and float(cached) > 0:
             return float(cached)
     except Exception:
-        # If DB is not available, proceed to fetch but don't fail loudly
         cached = None
+    # Try DB cache next for centralized/shared cache
+    try:
+        import db as db
+        cached_db = db.get_cached_rate(date_str, 'USD', 'TRY')
+        if cached_db and float(cached_db) > 0:
+            # populate in-memory cache for faster subsequent lookups
+            try:
+                fx_cache.set_(date_str, 'USD', 'TRY', float(cached_db))
+            except Exception:
+                pass
+            return float(cached_db)
+    except Exception:
+        cached_db = None
 
     # fetch from frankfurter
     url = f"https://api.frankfurter.app/{date_str}?from=USD&to=TRY"
@@ -35,13 +47,19 @@ def get_or_fetch_rate(date_str: str | None) -> Optional[float]:
             rates = data.get("rates") or {}
             v = rates.get("TRY")
             if v:
+                fv = float(v)
+                # Persist into in-memory/file cache
                 try:
-                    # Persist into DB cache if available
-                    import db as db
-                    db.set_cached_rate(date_str, 'USD', 'TRY', float(v))
+                    fx_cache.set_(date_str, 'USD', 'TRY', fv)
                 except Exception:
                     pass
-                return float(v)
+                # Also persist into DB cache if available (backward compatible)
+                try:
+                    import db as db
+                    db.set_cached_rate(date_str, 'USD', 'TRY', fv)
+                except Exception:
+                    pass
+                return fv
     except Exception:
         return None
     return None

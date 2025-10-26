@@ -1,6 +1,5 @@
 import tkinter as tk
-from tkinter import ttk, messagebox, filedialog
-import csv
+from tkinter import ttk, messagebox, filedialog, simpledialog
 from pathlib import Path
 import os
 import json
@@ -9,126 +8,80 @@ import subprocess
 from .theme import stripe_treeview, maximize_window, themed_button
 import core.fx_rates as fx_rates
 
+# DAO imports
+from db.sales_dao import list_sales, overwrite_sales, mark_sale_deleted, update_sale
+from db.returns_dao import list_returns, insert_return
+from db.imports_dao import get_sale_batch_info
+
+# Column headers for Treeview / CSV
+DESIRED_COLS = [
+    'Date', 'Category', 'Subcategory', 'Quantity', 'SellingPrice', 
+    'Platform', 'ProductID', 'CustomerID', 'DocumentPath', 
+    'FXToBase', 'SellingPriceBase', 'SaleCurrency', 'Deleted'
+]
+
+# ────────────────────────────────
+# Data access wrappers
+# ────────────────────────────────
+
 def read_sales(include_deleted: bool = False):
-    """Return sales as a list of CSV-like dicts.
-
-    Prefer DB-backed `list_sales()` if available; CSV fallback only when DB is unavailable.
-    The returned dicts keep the same keys used elsewhere in the UI (Date, Category, Subcategory, Quantity,
-    SellingPrice, Platform, ProductID, CustomerID, DocumentPath, FXToBase, SellingPriceBase, SaleCurrency, Deleted).
-    """
-    # Try DB first for up-to-date data
-    try:
-        import db as db
-        rows = db.list_sales(include_deleted=include_deleted)  # type: ignore[attr-defined]
-        out = []
-        for r in rows:
-            try:
-                if hasattr(r, 'keys'):
-                    rr = {k: r[k] for k in r.keys()}
-                else:
-                    rr = dict(r)
-            except Exception:
-                rr = dict(r) if isinstance(r, dict) else {}
-
-            # Map DB keys into CSV-like keys expected by the UI
-            mapped = {
-                'Date': rr.get('date') or rr.get('Date') or '',
-                'Category': rr.get('category') or rr.get('Category') or '',
-                'Subcategory': rr.get('subcategory') or rr.get('Subcategory') or '',
-                'Quantity': rr.get('quantity') or rr.get('Quantity') or '',
-                'SellingPrice': rr.get('selling_price') or rr.get('SellingPrice') or rr.get('unit_price') or '',
-                'Platform': rr.get('platform') or rr.get('Platform') or '',
-                'ProductID': rr.get('product_id') or rr.get('ProductID') or '',
-                'CustomerID': rr.get('customer_id') or rr.get('CustomerID') or '',
-                'DocumentPath': rr.get('document_path') or rr.get('doc_paths') or rr.get('DocumentPath') or '',
-                'FXToBase': rr.get('fx_to_base') or rr.get('FXToBase') or rr.get('SaleFXToTRY') or '',
-                'SellingPriceBase': rr.get('selling_price_base') or rr.get('SellingPriceBase') or rr.get('SellingPriceUSD') or '',
-                'SaleCurrency': (rr.get('sale_currency') or rr.get('SaleCurrency') or '')
-            }
-            # Preserve deleted flag if available
-            try:
-                deleted_val = rr.get('deleted')
-                if deleted_val is None:
-                    deleted_val = rr.get('Deleted')
-                mapped['Deleted'] = '1' if str(deleted_val) in ('1', 'True', 'true') else ''
-            except Exception:
-                mapped['Deleted'] = ''
-            out.append(mapped)
-        return out
-    except Exception:
-        # No CSV fallback: this app is DB-first. If DB access fails, return empty list.
-        return []
-
-
-# Include SaleCurrency to capture the currency in which the sale occurred.
-DESIRED_COLS = ['Date', 'Category', 'Subcategory', 'Quantity', 'SellingPrice', 'Platform', 'ProductID', 'CustomerID', 'DocumentPath', 'FXToBase', 'SellingPriceBase', 'SaleCurrency', 'Deleted']
-
+    return [_normalize_row_for_ui(r) for r in list_sales(include_deleted=include_deleted)]
 
 def write_sales(rows):
-    # Prefer DB-backed overwrite when available
-    try:
-        import db as db
-        # Convert CSV-like rows into DB column naming (snake_case)
-        db_rows = []
-        for r in rows:
-            rr = dict(r or {})
-            # Map common fields
-            db_rows.append({
-                'date': rr.get('Date', ''),
-                'category': rr.get('Category', ''),
-                'subcategory': rr.get('Subcategory', ''),
-                'quantity': rr.get('Quantity', ''),
-                'selling_price': rr.get('SellingPrice', '') or rr.get('unit_price', ''),
-                'platform': rr.get('Platform', ''),
-                'product_id': rr.get('ProductID', ''),
-                'customer_id': rr.get('CustomerID', ''),
-                'document_path': rr.get('DocumentPath', '') or rr.get('doc_paths', ''),
-                'fx_to_base': rr.get('FXToBase', ''),
-                'selling_price_base': rr.get('SellingPriceBase', '') or rr.get('SellingPriceUSD', ''),
-                'sale_currency': (rr.get('SaleCurrency') or '')
-            })
-        db.overwrite_sales(db_rows)  # type: ignore[attr-defined]
-        return
-    except Exception as e:
-        # Fail fast in DB-only mode: surface the error to the caller.
-        raise
-
+    return overwrite_sales(rows)
 
 def read_returns():
-    """Return returns as a list of dicts (DB-only).
-
-    Uses DB helper `list_returns()` exclusively. If DB access fails, returns an empty list.
-    """
+    """Fetch returns using DAO."""
     try:
-        import db as db
-        rows = db.list_returns()
-        out = []
-        for r in rows:
-            try:
-                rr = {k: r[k] for k in r.keys()} if hasattr(r, 'keys') else dict(r)
-            except Exception:
-                rr = {}
-            out.append({
-                'ReturnDate': rr.get('return_date',''),
-                'ProductID': rr.get('product_id',''),
-                'SaleDate': rr.get('sale_date',''),
-                'Category': rr.get('category',''),
-                'Subcategory': rr.get('subcategory',''),
-                'SellingPrice': rr.get('selling_price',''),
-                'Platform': rr.get('platform',''),
-                'RefundAmount': rr.get('refund_amount',''),
-                'RefundCurrency': rr.get('refund_currency',''),
-                'Restock': rr.get('restock',''),
-                'Reason': rr.get('reason',''),
-                'ReturnDocPath': rr.get('doc_paths',''),
-            })
-        return out
+        return [ _normalize_row_for_ui(r) for r in list_returns() ]
     except Exception:
-        return []
+        try:
+            return list_returns()
+        except Exception:
+            return []
+
+
+def _normalize_row_for_ui(row):
+    """Return a copy of the DB row that contains both snake_case and TitleCase keys
+    so the legacy UI can read either shape."""
+    try:
+        r = dict(row)
+    except Exception:
+        # If it's already a dict-like
+        r = {} if row is None else dict(row)
+    # Mapping from UI TitleCase -> DB snake_case
+    mapping = {
+        'Date': 'date',
+        'Category': 'category',
+        'Subcategory': 'subcategory',
+        'Quantity': 'quantity',
+        'SellingPrice': 'selling_price',
+        'Platform': 'platform',
+        'ProductID': 'product_id',
+        'CustomerID': 'customer_id',
+        'DocumentPath': 'document_path',
+        'FXToBase': 'fx_to_base',
+        'SellingPriceBase': 'selling_price_base',
+        'SaleCurrency': 'sale_currency',
+        'Deleted': 'deleted',
+    }
+    for ui_k, db_k in mapping.items():
+        # Ensure both forms exist on the dict so existing UI code can access either
+        if ui_k not in r and db_k in r:
+            try:
+                r[ui_k] = r.get(db_k)
+            except Exception:
+                r[ui_k] = r.get(db_k)
+        if db_k not in r and ui_k in r:
+            try:
+                r[db_k] = r.get(ui_k)
+            except Exception:
+                r[db_k] = r.get(ui_k)
+    return r
 
 
 def open_view_sales_window(root):
-    rows = read_sales()
+    rows = [ _normalize_row_for_ui(r) for r in read_sales() ]
     if not rows:
         messagebox.showinfo('No data', 'No sales found.')
         return
@@ -465,7 +418,7 @@ def open_view_sales_window(root):
     populate_tree(rows, 'All', '')
 
     def refresh():
-        new_rows = read_sales(include_deleted=show_deleted_var.get())
+        new_rows = [ _normalize_row_for_ui(r) for r in read_sales(include_deleted=show_deleted_var.get()) ]
         # Refresh year options (in case new prefixes were added)
         vals = compute_year_options(new_rows)
         year_combo['values'] = vals
@@ -508,11 +461,14 @@ def open_view_sales_window(root):
             messagebox.showwarning('Select', 'Select at least one row first')
             return
         count = len(sel)
+
+        # Offer Void (recommended) vs Soft-delete
         if count == 1:
-            prompt = 'Delete the selected sale?'
+            choice_msg = 'Choose action for selected sale:\n\nYes = Void sale (mark void + optional reversal)\nNo = Soft-delete only (hide record)\nCancel = Abort'
         else:
-            prompt = f'Delete {count} selected sales?'
-        if not messagebox.askyesno('Confirm', prompt):
+            choice_msg = f'Choose action for {count} selected sales:\n\nYes = Void sales (mark void + optional reversal)\nNo = Soft-delete only (hide records)\nCancel = Abort'
+        choice = messagebox.askyesnocancel('Delete / Void', choice_msg, icon='question')
+        if choice is None:
             return
 
         # Gather DB ids from selection
@@ -536,23 +492,56 @@ def open_view_sales_window(root):
         if not ids:
             messagebox.showinfo('Nothing', 'No matching rows to delete')
             return
+
         try:
             import db as db
-            db.mark_sale_deleted(ids)
-            refresh()
+            any_done = False
+            if choice is False:
+                # Soft-delete all at once
+                try:
+                    db.mark_sale_deleted(ids)
+                    any_done = True
+                except Exception:
+                    any_done = False
+            else:
+                # Void path: soft-delete then void per sale (ask per-sale for reversal and reason)
+                for sid in ids:
+                    try:
+                        db.mark_sale_deleted([sid])
+                        any_done = True
+                        try:
+                            create_rev = messagebox.askyesno('Reversal', f'Create reversal entry for sale id={sid}?', parent=win)
+                        except Exception:
+                            create_rev = False
+                        try:
+                            reason = simpledialog.askstring('Void Reason', f'Provide reason for voiding sale id={sid} (optional):', parent=win)
+                        except Exception:
+                            reason = None
+                        try:
+                            db.void_sale(sid, by=None, reason=reason, create_reversal=bool(create_rev))
+                        except Exception:
+                            pass
+                    except Exception:
+                        continue
+            if any_done:
+                refresh()
+            return
         except Exception:
-            # Fall back to CSV editing where necessary
+            # Fall back to CSV editing when DB path not available
             rows = read_sales()
             changed = False
             for r in rows:
-                if str(r.get('id')) in [str(x) for x in ids] or r.get('ProductID') and str(r.get('ProductID')) in [str(x) for x in ids]:
-                    try:
+                try:
+                    if str(r.get('id')) in [str(x) for x in ids] or (r.get('ProductID') and str(r.get('ProductID')) in [str(x) for x in ids]):
                         r['Deleted'] = '1'
                         changed = True
-                    except Exception:
-                        pass
+                except Exception:
+                    pass
             if changed:
-                write_sales(rows)
+                try:
+                    write_sales(rows)
+                except Exception:
+                    pass
                 refresh()
 
     def do_mark_returned():
@@ -562,13 +551,18 @@ def open_view_sales_window(root):
             return
         try:
             import db as db
-            rows = db.list_sales(include_deleted=True)
+            rows = [ _normalize_row_for_ui(r) for r in db.list_sales(include_deleted=True) ]
             rec = next((r for r in rows if r.get('id') == idx), None)
         except Exception:
             rec = None
         if not rec:
             messagebox.showerror('Error', 'Invalid selection or sale not found')
             return
+        # Debug: print selection and record info
+        try:
+            print(f"[DEBUG] do_mark_returned selected id={idx} product_id={rec.get('product_id') or rec.get('ProductID')}")
+        except Exception:
+            pass
         # Helper to read either DB-style (snake_case) or UI-style (TitleCase) keys
         def _pick(*keys):
             for k in keys:
@@ -582,6 +576,10 @@ def open_view_sales_window(root):
 
         # Prevent duplicate returns for same product id
         existing = { (r.get('ProductID') or '').strip() for r in read_returns() }
+        try:
+            print(f"[DEBUG] existing returns PIDs count={len(existing)} sample={list(existing)[:5]}")
+        except Exception:
+            pass
         pid = _pick('product_id', 'ProductID')
         if pid in existing:
             if not messagebox.askyesno('Already returned', 'This Product ID already has a return recorded. Record another return anyway?'):
@@ -704,7 +702,7 @@ def open_view_sales_window(root):
                         refund_ccy = ''
 
                 # Build fields and insert using the normalized pick helper
-                res = db.insert_return({
+                payload = {
                     'return_date': d,
                     'product_id': pid,
                     'sale_date': _pick('date', 'Date', 'sale_date', 'SaleDate'),
@@ -718,7 +716,16 @@ def open_view_sales_window(root):
                     'restock': restock_final,
                     'reason': reason_var.get().strip(),
                     'doc_paths': doc_entry.get().strip(),
-                })
+                }
+                try:
+                    print(f"[DEBUG] inserting return payload product_id={payload.get('product_id')} refund={payload.get('refund_amount')}")
+                except Exception:
+                    pass
+                res = db.insert_return(payload)
+                try:
+                    print(f"[DEBUG] insert_return result={res}")
+                except Exception:
+                    pass
                 # Show batch restock confirmation if insert_return returned restocked details
                 try:
                     if res and isinstance(res, dict) and res.get('restocked_batches'):
@@ -753,7 +760,7 @@ def open_view_sales_window(root):
             return
         try:
             import db as db
-            rows = db.list_sales(include_deleted=True)
+            rows = [ _normalize_row_for_ui(r) for r in db.list_sales(include_deleted=True) ]
             rec = next((r for r in rows if r.get('id') == idx), None)
         except Exception:
             rec = None
@@ -862,8 +869,9 @@ def open_view_sales_window(root):
                 # Fallback to CSV overwrite
                 rows = read_sales()
                 try:
-                    if 0 <= idx < len(rows):
-                        rows[idx] = {
+                    found_i = next((i for i, r in enumerate(rows) if r.get('id') == idx), None)
+                    if found_i is not None:
+                        rows[found_i] = {
                             'Date': d,
                             'Category': cat,
                             'Subcategory': sub,
@@ -908,10 +916,10 @@ def open_view_sales_window(root):
             messagebox.showwarning('Select', 'Select a row first')
             return
         rows = read_sales()
-        if not (0 <= idx < len(rows)):
+        rec = next((r for r in rows if r.get('id') == idx), None)
+        if not rec:
             messagebox.showerror('Error', 'Invalid selection index', parent=win)
             return
-        rec = rows[idx]
         product_id = (rec.get('ProductID') or '').strip()
         docs = parse_docs(rec.get('DocumentPath', ''))
 
@@ -1041,7 +1049,7 @@ def open_view_sales_window(root):
         
         try:
             import db as db
-            rows = db.list_sales(include_deleted=True)
+            rows = [ _normalize_row_for_ui(r) for r in db.list_sales(include_deleted=True) ]
             rec = next((r for r in rows if r.get('id') == idx), None)
         except Exception:
             rec = None
@@ -1054,7 +1062,7 @@ def open_view_sales_window(root):
             return
         try:
             import db as db
-            allocations = db.get_sale_batch_info(product_id)
+            allocations = get_sale_batch_info(product_id)
             show_batch_info_dialog(product_id, allocations)
         except Exception as e:
             messagebox.showerror('Error', f'Failed to get batch info: {e}')

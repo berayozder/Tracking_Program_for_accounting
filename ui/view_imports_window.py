@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, simpledialog
 import db as db
 from .theme import stripe_treeview, maximize_window, themed_button, make_treeview_sortable, export_treeview_csv, apply_theme
 
@@ -219,14 +219,16 @@ def open_view_imports_window(root):
             messagebox.showwarning('Select', 'Select at least one row first')
             return
         count = len(sel)
+        # Offer Void (recommended) vs Soft-delete
         if count == 1:
-            prompt = 'Soft-delete the selected import? This will hide it from views but keep a record.'
+            choice_msg = 'Choose action for selected import:\n\nYes = Void import (mark void + soft-delete and rebuild inventory)\nNo = Soft-delete only (hide record)\nCancel = Abort'
         else:
-            prompt = f'Soft-delete {count} selected imports? This will hide them from views but keep records.'
-        if not messagebox.askyesno('Confirm', prompt):
+            choice_msg = f'Choose action for {count} selected imports:\n\nYes = Void imports (mark void + soft-delete and rebuild inventory)\nNo = Soft-delete only (hide records)\nCancel = Abort'
+        choice = messagebox.askyesnocancel('Delete / Void', choice_msg, icon='question')
+        if choice is None:
             return
 
-        any_deleted = False
+        any_done = False
         for iid in sel:
             try:
                 vals = tree.item(iid).get('values', ())
@@ -235,11 +237,23 @@ def open_view_imports_window(root):
                 iid_val = rec.get('id') or (vals[0] if vals else None)
                 if iid_val is None:
                     continue
+                # Soft-delete (shared behavior)
                 db.delete_import(int(iid_val))
-                any_deleted = True
+                any_done = True
+                # If Void chosen, also mark void metadata
+                if choice is True:
+                    try:
+                        reason = simpledialog.askstring('Void Reason', f'Provide a reason for voiding import id={iid_val} (optional):', parent=window)
+                    except Exception:
+                        reason = None
+                    try:
+                        # mark voided on the import row for audit; delete_import already did soft-delete and rebuilt inventory
+                        db.void_transaction('imports', 'id', int(iid_val), by=None, reason=reason)
+                    except Exception:
+                        pass
             except Exception:
                 continue
-        if any_deleted:
+        if any_done:
             refresh()
 
     def do_edit():

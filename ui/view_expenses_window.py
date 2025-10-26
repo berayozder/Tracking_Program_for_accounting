@@ -2,6 +2,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 from datetime import datetime
 import db as db
+from tkinter import simpledialog
 from .theme import stripe_treeview, maximize_window, apply_theme, themed_button
 import os
 import json
@@ -267,16 +268,51 @@ def open_view_expenses_window(root):
         return records_by_iid.get(iid)
 
     def do_delete():
-        rec = get_selected()
-        if not rec:
-            messagebox.showwarning('Select', 'Select a row first')
+        sel = tree.selection()
+        if not sel:
+            messagebox.showwarning('Select', 'Select at least one row first')
             return
-        if messagebox.askyesno('Confirm', 'Delete selected expense?'):
+        count = len(sel)
+        # Offer Void (recommended) vs Soft-delete
+        if count == 1:
+            choice_msg = 'Choose action for selected expense:\n\nYes = Void expense (mark void + soft-delete)\nNo = Soft-delete only (hide record)\nCancel = Abort'
+        else:
+            choice_msg = f'Choose action for {count} selected expenses:\n\nYes = Void expenses (mark void + soft-delete)\nNo = Soft-delete only (hide records)\nCancel = Abort'
+        choice = messagebox.askyesnocancel('Delete / Void', choice_msg, icon='question')
+        if choice is None:
+            return
+
+        any_done = False
+        for iid in sel:
             try:
-                db.delete_expense(int(rec.get('id')))
-                refresh()
-            except Exception as e:
-                messagebox.showerror('Error', f'Failed to delete: {e}')
+                eid = int(iid)
+            except Exception:
+                # skip non-numeric iids
+                continue
+            try:
+                # Soft-delete (delete_expense performs require_admin and marks deleted)
+                db.delete_expense(eid)
+                any_done = True
+                if choice is True:
+                    try:
+                        reason = simpledialog.askstring('Void Reason', f'Provide a reason for voiding expense id={eid} (optional):', parent=window)
+                    except Exception:
+                        reason = None
+                    try:
+                        db.void_transaction('expenses', 'id', eid, by=None, reason=reason)
+                    except Exception:
+                        pass
+            except Exception:
+                # Fall back: no DB available; mark in-memory as deleted where possible
+                try:
+                    rec = records_by_iid.get(str(eid))
+                    if rec:
+                        rec['deleted'] = 1
+                        any_done = True
+                except Exception:
+                    continue
+        if any_done:
+            refresh()
 
     def do_undelete():
         sel = tree.selection()

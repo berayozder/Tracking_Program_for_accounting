@@ -4,6 +4,7 @@ from datetime import datetime
 from pathlib import Path
 import db as db
 import core.fx_rates as fx_rates
+import core.fx_cache as fx_cache
 
 """Record Sale UI writing to CSV.
 CSV columns (canonical):
@@ -15,9 +16,40 @@ FXToBase, SellingPriceBase, SaleCurrency
 
 def append_sale(row_dict):
     """Persist a sale using the DB helper (backwards-compatible signature)."""
+    # Normalize UI/titlecase keys to DAO snake_case keys
     try:
-        nid = db.add_sale(row_dict)
-        return nid
+        normalized = {
+            'date': row_dict.get('date') or row_dict.get('Date'),
+            'category': row_dict.get('category') or row_dict.get('Category'),
+            'subcategory': row_dict.get('subcategory') or row_dict.get('Subcategory'),
+            'quantity': row_dict.get('quantity') or row_dict.get('Quantity'),
+            'selling_price': row_dict.get('selling_price') or row_dict.get('SellingPrice') or row_dict.get('price_per_item'),
+            'platform': row_dict.get('platform') or row_dict.get('Platform'),
+            'product_id': row_dict.get('product_id') or row_dict.get('ProductID'),
+            'customer_id': row_dict.get('customer_id') or row_dict.get('CustomerID'),
+            'document_path': row_dict.get('document_path') or row_dict.get('DocumentPath') or row_dict.get('document_path'),
+            'fx_to_base': row_dict.get('fx_to_base') or row_dict.get('FXToBase'),
+            'selling_price_base': row_dict.get('selling_price_base') or row_dict.get('SellingPriceBase') or row_dict.get('SellingPriceUSD'),
+            'sale_currency': row_dict.get('sale_currency') or row_dict.get('SaleCurrency') or row_dict.get('currency'),
+            'deleted': int(row_dict.get('deleted', 0) or 0),
+        }
+        # Prefer package-level add_sale; fallback to DAO module directly
+        try:
+            if hasattr(db, 'add_sale') and callable(getattr(db, 'add_sale')):
+                return db.add_sale(normalized)
+        except Exception:
+            # fall through to direct DAO
+            pass
+        try:
+            # direct import to avoid relying on db package exports
+            from db import sales_dao
+            return sales_dao.add_sale(normalized)
+        except Exception:
+            try:
+                import db.sales_dao as _sd
+                return _sd.add_sale(normalized)
+            except Exception:
+                return None
     except Exception:
         return None
 
@@ -198,14 +230,32 @@ def open_sales_window(root):
                 _set_fx_value(r, 'Live')
                 return
         # Fallback to cached-or-fetch for other dates
+        from_ccy = (sale_ccy_var.get() or 'TRY').upper()
+        to_ccy = db.get_base_currency()
+        # Prefer in-memory suggestion cache first
         try:
-            from_ccy = (sale_ccy_var.get() or 'TRY').upper()
-            to_ccy = db.get_base_currency()
+            sugg = fx_cache.get(d, from_ccy, to_ccy)
+        except Exception:
+            sugg = None
+        if sugg:
+            _set_fx_value(sugg, 'Suggested (cache)')
+            return
+        # Then DB cache
+        try:
+            db_cached = db.get_cached_rate(d, from_ccy, to_ccy)
+        except Exception:
+            db_cached = None
+        if db_cached:
+            _set_fx_value(db_cached, 'Cached')
+            return
+        # Finally try generic/get_or_fetch which may fetch live
+        try:
             r = db._get_rate_generic(d, from_ccy, to_ccy)
         except Exception:
             r = fx_rates.get_or_fetch_rate(d)
         if r is not None:
-            _set_fx_value(r, 'Cached')
+            # If neither sugg nor db_cached existed earlier, this likely came from a live fetch
+            _set_fx_value(r, 'Live')
         else:
             _set_fx_manual('Offline - enter rate')
 
@@ -226,11 +276,28 @@ def open_sales_window(root):
         try:
             from_ccy = (sale_ccy_var.get() or 'TRY').upper()
             to_ccy = db.get_base_currency()
+            # Check in-memory suggestion cache first
+            try:
+                sugg = fx_cache.get(d, from_ccy, to_ccy)
+            except Exception:
+                sugg = None
+            if sugg:
+                _set_fx_value(sugg, 'Suggested (cache)')
+                return
+            # Then DB cache
+            try:
+                db_cached = db.get_cached_rate(d, from_ccy, to_ccy)
+            except Exception:
+                db_cached = None
+            if db_cached:
+                _set_fx_value(db_cached, 'Cached')
+                return
             r = db._get_rate_generic(d, from_ccy, to_ccy)
         except Exception:
             r = fx_rates.get_or_fetch_rate(d)
         if r is not None:
-            _set_fx_value(r, 'Cached')
+            # If we reached here and db_cached/sugg were absent, it's likely live-or-generic
+            _set_fx_value(r, 'Live')
         else:
             # Allow manual entry if fetch failed
             _set_fx_manual('Offline - enter rate')

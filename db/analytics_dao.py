@@ -402,7 +402,7 @@ def get_monthly_expenses(year: int):
     cur.execute('''
         SELECT date, strftime('%Y-%m', date) as ym, COALESCE(amount,0) as amount, COALESCE(currency,'') as currency
         FROM expenses
-        WHERE strftime('%Y', date) = ?
+        WHERE (deleted IS NULL OR deleted = 0) AND strftime('%Y', date) = ?
         ORDER BY date
     ''', (str(year),))
     rows = cur.fetchall()
@@ -508,6 +508,7 @@ def get_yearly_expenses():
     cur.execute('''
         SELECT date, strftime('%Y', date) as y, COALESCE(amount,0) as amount, COALESCE(currency,'') as currency
         FROM expenses
+        WHERE (deleted IS NULL OR deleted = 0)
         ORDER BY date
     ''')
     rows = cur.fetchall()

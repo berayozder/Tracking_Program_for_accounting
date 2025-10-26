@@ -1,11 +1,10 @@
 from .connection import DB_PATH,get_conn
+
 def float_or_none(v):
     try:
         return float(v)
     except Exception:
         return None
-
-
 
 def delete_database_file():
     try:
