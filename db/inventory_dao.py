@@ -57,41 +57,35 @@ def rebuild_inventory_from_imports(cur=None):
     Can optionally accept a cursor to avoid creating a new connection.
     """
     now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    close_cursor = False
     if cur:
         cursor = cur
-        cursor.execute('DELETE FROM inventory')
-        cursor.execute('''
-            INSERT INTO inventory (category, subcategory, quantity, last_updated)
-            SELECT category, subcategory, SUM(quantity), ?
-            FROM imports
-            GROUP BY category, subcategory
-        ''', (now,))
     else:
-        with get_cursor() as (conn, cursor):
-            cursor.execute('DELETE FROM inventory')
-            cursor.execute('''
-                INSERT INTO inventory (category, subcategory, quantity, last_updated)
-                SELECT category, subcategory, SUM(quantity), ?
-                FROM imports
-                GROUP BY category, subcategory
-            ''', (now,))
-            conn.commit()
+        ctx = get_cursor()
+        conn, cursor = ctx.__enter__()
         close_cursor = True
+    cursor.execute('DELETE FROM inventory')
+    cursor.execute('''
+        INSERT INTO inventory (category, subcategory, quantity, last_updated)
+        SELECT category, subcategory, SUM(quantity), ?
+        FROM imports
+        GROUP BY category, subcategory
+    ''', (now,))
+    if not cur:
+        conn.commit()
 
     try:
         cursor.execute('SELECT category, subcategory, SUM(quantity) as qty FROM active_imports GROUP BY category, subcategory')
     except Exception:
         cursor.execute('SELECT category, subcategory, SUM(quantity) as qty FROM imports GROUP BY category, subcategory')
-    
+
     rows = cursor.fetchall()
     cursor.execute('DELETE FROM inventory')
-    
+
     for r in rows:
         cursor.execute('INSERT INTO inventory (category, subcategory, quantity, last_updated) VALUES (?,?,?,?)',
                        (r['category'] or '', r['subcategory'] or '', r['qty'] or 0, now))
 
+    cursor.connection.commit()
     if close_cursor:
-        cursor.connection.commit()
-        cursor.__exit__(None, None, None)
-    else:
-        cursor.connection.commit()
+        ctx.__exit__(None, None, None)
