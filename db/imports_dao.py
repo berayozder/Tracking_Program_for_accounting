@@ -31,32 +31,30 @@ def add_import(
     Add a new import record, with optional line items and expense allocation.
     Handles supplier creation, FX conversion, and inventory update.
     """
-    print("[DEBUG] add_import called with:", date, ordered_price, quantity, supplier, notes, category, subcategory, currency, fx_override, lines, total_import_expenses, include_expenses)
-    print("[DEBUG] About to call get_cursor")
-    print("[DEBUG] get_cursor:", get_cursor)
+    
     with get_cursor() as (conn, cur):
-        print(f"[DEBUG] Entered get_cursor: conn={conn}, cur={cur}")
+    
         # --- Supplier handling ---
         supplier_name = (supplier or '').strip()
         supplier_id = None
-        print("[DEBUG] About to call find_or_create_supplier:", find_or_create_supplier)
+    
         if supplier_name:
             try:
                 supplier_id = find_or_create_supplier(supplier_name)
-                print(f"[DEBUG] Found/created supplier_id: {supplier_id}")
+                
             except Exception as e:
                 logger.error(f"[add_import] Failed to find or create supplier '{supplier_name}': {e}")
-                print(f"[ERROR] Failed to find or create supplier: {e}")
+                
                 supplier_id = None
 
-        print("[DEBUG] About to call encrypt_str:", encrypt_str)
+    
         enc_notes = encrypt_str(notes)
         cur_ccy = (currency or get_default_import_currency() or 'USD').upper()
-        print(f"[DEBUG] enc_notes: {enc_notes}, cur_ccy: {cur_ccy}")
+    
 
         # --- Insert main import record ---
         try:
-            print("[DEBUG] About to execute INSERT INTO imports")
+            
             cur.execute('''
                 INSERT INTO imports (
                     date, ordered_price, quantity, supplier, supplier_id, notes, category, subcategory, currency
@@ -73,9 +71,9 @@ def add_import(
                 cur_ccy
             ))
             import_id = cur.lastrowid
-            print(f"[DEBUG] Inserted import with id: {import_id}")
+            
         except Exception as e:
-            print(f"[ERROR] Failed to insert import: {e}")
+            
             raise
 
 
@@ -87,7 +85,7 @@ def add_import(
         allocation_groups = []
         if multi_imports and isinstance(multi_imports, list) and len(multi_imports) > 0:
             # multi_imports: list of dicts, each dict: {'import_id': int, 'lines': List[Dict]}
-            print(f"[DEBUG] Multi-import expense allocation for {len(multi_imports)} imports")
+            
             for imp in multi_imports:
                 allocation_groups.append((imp.get('import_id'), imp.get('lines', [])))
         elif lines and isinstance(lines, list) and len(lines) > 0:
@@ -117,12 +115,12 @@ def add_import(
             if grand_total_value == 0 or imp_total == 0:
                 continue
             imp_expense = expense_amount * (imp_total / grand_total_value)
-            print(f"[DEBUG] Import {group_id} gets expense {imp_expense}")
+            
             for ln in group_lines:
                 ln_price = float_or_none(ln.get('ordered_price'))
                 ln_qty = float_or_none(ln.get('quantity'))
                 if not ln_qty or ln_qty == 0:
-                    print(f"[DEBUG] Skipping line with zero quantity: {ln}")
+                    
                     continue
                 line_value = (ln_price or 0.0) * (ln_qty or 0.0)
                 line_share = (line_value / imp_total) if imp_total else 0.0
@@ -131,26 +129,26 @@ def add_import(
                 adjusted_price = (ln_price or 0.0) + extra_per_unit
                 try:
                     _insert_line(cur, group_id, ln.get('category'), ln.get('subcategory'), adjusted_price, ln_qty, date, cur_ccy, fx_override, supplier, notes)
-                    print(f"[DEBUG] Inserted line for import {group_id} cat={ln.get('category')}, sub={ln.get('subcategory')}, price={adjusted_price}, allocated_expense={allocated_expense}, qty={ln_qty}")
+                    
                 except Exception as e:
-                    print(f"[ERROR] Failed to insert line for import: {e}")
+                    
                     raise
 
         # --- Persist import-level expenses and audit ---
         try:
-            print("[DEBUG] About to update import expenses")
+            
             cur.execute('UPDATE imports SET total_import_expenses=?, include_expenses=? WHERE id=?',
                         (float(total_import_expenses or 0.0), 1 if include_expenses else 0, import_id))
-            print(f"[DEBUG] Updated import expenses for id: {import_id}")
+            
         except Exception as e:
             print(f"[ERROR] Failed to update import expenses: {e}")
             raise
         try:
-            print("[DEBUG] About to call write_audit:", write_audit)
+            
             write_audit('add', 'import', str(import_id), f"qty={quantity}; price={ordered_price}", cur=cur)
-            print(f"[DEBUG] Wrote audit log for import id: {import_id}")
+            
         except Exception as e:
-            print(f"[ERROR] Failed to write audit log: {e}")
+            
             raise
 
 
@@ -776,7 +774,6 @@ def recompute_import_batches(import_id_or_ids, total_expense: float = None):
             conn.commit()
     else:
         import_id = import_id_or_ids
-        print(f"[DEBUG] recompute_import_batches called with import_id={import_id}")
         with get_cursor() as (conn, cur):
             # --- Load import ---
             cur.execute('SELECT total_import_expenses, include_expenses, currency, date FROM imports WHERE id=?', (import_id,))
@@ -785,7 +782,7 @@ def recompute_import_batches(import_id_or_ids, total_expense: float = None):
                 print(f"[DEBUG] No import found for id={import_id}")
                 return
             imp = dict(imp)
-            print(f"[DEBUG] Loaded import: {imp}")
+            
             include_flag = bool(int(imp.get('include_expenses') or 0))
             imp_currency = (imp.get('currency') or get_default_import_currency() or 'USD').upper()
             imp_date = imp.get('date')
@@ -825,7 +822,7 @@ def recompute_import_batches(import_id_or_ids, total_expense: float = None):
                         amt = float(conv) if conv is not None else amt
                     linked_sum += amt * share
                 total_expenses = linked_sum if linked_sum > 0 else float(imp.get('total_import_expenses') or 0.0)
-                print(f"[DEBUG] total_expenses for import_id={import_id}: {total_expenses}")
+                
             except Exception as e:
                 print(f"[DEBUG] Exception summing linked expenses: {e}")
                 total_expenses = float(imp.get('total_import_expenses') or 0.0)
@@ -833,13 +830,13 @@ def recompute_import_batches(import_id_or_ids, total_expense: float = None):
             # --- Load lines ---
             cur.execute('SELECT id, category, subcategory, ordered_price, quantity FROM import_lines WHERE import_id=?', (import_id,))
             lines = [dict(r) for r in cur.fetchall()]
-            print(f"[DEBUG] Loaded lines for import_id={import_id}: {lines}")
+            
             if not lines:
-                print(f"[DEBUG] No lines found for import_id={import_id}")
+                
                 return
 
             total_order_value = sum(float(l.get('ordered_price') or 0) * float(l.get('quantity') or 0) for l in lines)
-            print(f"[DEBUG] total_order_value for import_id={import_id}: {total_order_value}")
+            
             apply_allocation = include_flag or (total_expenses > 0)
 
             # --- Recompute batches ---
@@ -852,7 +849,7 @@ def recompute_import_batches(import_id_or_ids, total_expense: float = None):
                 if apply_allocation and total_order_value > 0 and qty > 0:
                     share = line_total / total_order_value
                     adjusted_price = unit_price + (total_expenses * share) / qty
-                print(f"[DEBUG] Line {lid}: unit_price={unit_price}, qty={qty}, adjusted_price={adjusted_price}")
+                
 
                 # --- Base currency ---
                 unit_cost_base = adjusted_price
@@ -863,7 +860,7 @@ def recompute_import_batches(import_id_or_ids, total_expense: float = None):
                         if conv is not None:
                             unit_cost_base = float(conv)
                 except Exception as e:
-                    print(f"[DEBUG] Exception converting to base currency: {e}")
+                    pass
 
                 # --- Update batches ---
                 cur.execute('SELECT id FROM import_batches WHERE import_line_id=? AND import_id=?', (lid, import_id))
@@ -878,4 +875,4 @@ def recompute_import_batches(import_id_or_ids, total_expense: float = None):
                         SET unit_cost=?, unit_cost_base=?, unit_cost_orig = COALESCE(unit_cost_orig, ?)
                         WHERE id=?''', (adjusted_price, unit_cost_base, unit_price, bid))
             conn.commit()
-        print(f"[DEBUG] Finished recompute_import_batches for import_id={import_id}")
+    
