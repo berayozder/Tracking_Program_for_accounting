@@ -23,6 +23,7 @@ from ui.audit_log_window import open_audit_log_window
 from ui.backup_window import open_backup_window
 from ui.settings_window import open_settings_window
 from ui.trash_window import open_trash_window
+from ui.admin_backup_button import add_backup_button_to_frame
 
 # Global shutdown flag
 app_exiting = False
@@ -159,9 +160,14 @@ def main():
     themed_button(analytics_frame, text='📈 Monthly/Yearly Analysis', command=lambda: open_monthly_yearly_analytics_window(root)).grid(row=1, column=0, sticky='ew', pady=4)
     themed_button(analytics_frame, text='🔢 Manage Product Codes', command=lambda: open_manage_product_codes_window(root)).grid(row=2, column=0, sticky='ew', pady=4)
 
+    # Add one-click backup button at the top of the Admin tab
+    backup_btn_frame = ttk.Frame(tab_admin)
+    backup_btn_frame.pack(fill='x', pady=(8, 0))
+    add_backup_button_to_frame(backup_btn_frame, root)
+
     # Section: Admin & Other
-    admin_frame = ttk.LabelFrame(home_container, text="⚙️ Admin & Other", padding=16)
-    admin_frame.grid(row=2, column=0, columnspan=2, sticky='nsew', padx=0, pady=(0, 0))
+    admin_frame = ttk.LabelFrame(tab_admin, text="⚙️ Admin & Other", padding=16)
+    admin_frame.pack(fill='both', expand=True, padx=0, pady=(0, 0))
     themed_button(admin_frame, text='👥 Manage Customers', command=lambda: open_customers_window(root)).grid(row=0, column=0, sticky='ew', pady=4, padx=(0, 8))
     themed_button(admin_frame, text='🏢 Manage Suppliers', command=lambda: open_suppliers_window(root)).grid(row=0, column=1, sticky='ew', pady=4, padx=(8, 0))
     themed_button(admin_frame, text='⚙️ Settings', command=lambda: open_settings_window(root)).grid(row=1, column=0, sticky='ew', pady=4, padx=(0, 8))

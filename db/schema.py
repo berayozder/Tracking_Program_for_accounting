@@ -40,32 +40,52 @@ def init_db_schema(conn):
     add_column_if_missing(cur, 'imports', 'is_vat_inclusive INTEGER DEFAULT 1')
     add_column_if_missing(cur, 'imports', 'document_path TEXT')
 
+
+    # Customers table for referential integrity
     cur.execute('''
-    CREATE TABLE IF NOT EXISTS import_lines (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        import_id INTEGER,
-        category TEXT,
-        subcategory TEXT,
-        ordered_price REAL,
-        quantity REAL,
-        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (import_id) REFERENCES imports(id) ON DELETE CASCADE
+    CREATE TABLE IF NOT EXISTS customers (
+        customer_id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        email TEXT,
+        phone TEXT,
+        address TEXT,
+        notes TEXT,
+        created_date TEXT
     )
     ''')
 
+    # Sales table with NOT NULL and foreign key constraints
     cur.execute('''
-    CREATE TABLE IF NOT EXISTS expenses (
+    CREATE TABLE IF NOT EXISTS sales (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        date TEXT,
-        amount REAL,
-        is_import_related INTEGER,
-        import_id INTEGER,
-        category TEXT,
-        notes TEXT,
+        date TEXT NOT NULL,
+        category TEXT NOT NULL,
+        subcategory TEXT,
+        quantity REAL NOT NULL,
+        selling_price REAL NOT NULL,
+        platform TEXT,
+        product_id TEXT NOT NULL,
+        customer_id TEXT NOT NULL,
         document_path TEXT,
-        currency TEXT,
-        deleted INTEGER DEFAULT 0
-    )
+        fx_to_base REAL,
+        selling_price_base REAL,
+        sale_currency TEXT,
+        vat_rate REAL NOT NULL DEFAULT 18.0,
+        vat_amount REAL NOT NULL DEFAULT 0.0,
+        is_vat_inclusive INTEGER NOT NULL DEFAULT 1,
+        deleted INTEGER DEFAULT 0,
+        deleted_at TEXT,
+        deleted_by TEXT,
+        delete_reason TEXT,
+        voided INTEGER DEFAULT 0,
+        voided_at TEXT,
+        voided_by TEXT,
+        void_reason TEXT,
+        reversal_id INTEGER,
+        FOREIGN KEY (product_id) REFERENCES product_codes(cat_code) ON DELETE RESTRICT,
+        FOREIGN KEY (customer_id) REFERENCES customers(customer_id) ON DELETE RESTRICT
+
+    );
     ''')
 
     cur.execute('''
@@ -153,21 +173,21 @@ def init_db_schema(conn):
     cur.execute('''
     CREATE TABLE IF NOT EXISTS sales (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        date TEXT,
-        category TEXT,
+        date TEXT NOT NULL,
+        category TEXT NOT NULL,
         subcategory TEXT,
-        quantity REAL,
-        selling_price REAL,
+        quantity REAL NOT NULL,
+        selling_price REAL NOT NULL,
         platform TEXT,
-        product_id TEXT,
-        customer_id TEXT,
+        product_id TEXT NOT NULL,
+        customer_id TEXT NOT NULL,
         document_path TEXT,
         fx_to_base REAL,
         selling_price_base REAL,
         sale_currency TEXT,
-        vat_rate REAL DEFAULT 18.0,
-        vat_amount REAL DEFAULT 0.0,
-        is_vat_inclusive INTEGER DEFAULT 1,
+        vat_rate REAL NOT NULL DEFAULT 18.0,
+        vat_amount REAL NOT NULL DEFAULT 0.0,
+        is_vat_inclusive INTEGER NOT NULL DEFAULT 1,
         deleted INTEGER DEFAULT 0,
         deleted_at TEXT,
         deleted_by TEXT,
@@ -176,7 +196,23 @@ def init_db_schema(conn):
         voided_at TEXT,
         voided_by TEXT,
         void_reason TEXT,
-        reversal_id INTEGER
+        reversal_id INTEGER,
+        FOREIGN KEY (product_id) REFERENCES product_codes(cat_code) ON DELETE SET NULL,
+        FOREIGN KEY (customer_id) REFERENCES customers(customer_id) ON DELETE SET NULL
+    )
+    ''')
+
+    # Ensure customers table exists for foreign key
+    cur.execute('''
+    CREATE TABLE IF NOT EXISTS customers (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        customer_id TEXT UNIQUE NOT NULL,
+        name TEXT NOT NULL,
+        email TEXT,
+        phone TEXT,
+        address TEXT,
+        notes TEXT,
+        created_date TEXT
     )
     ''')
 

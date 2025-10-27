@@ -461,6 +461,32 @@ db.delete_database_file()  # Complete reset
 
 ## 📝 Development
 
+## 🚀 Recent Improvements
+
+### Paginated Table Views for Large Datasets
+Expenses and imports windows now feature a paginated Treeview for efficient browsing of large datasets:
+- Displays 50 rows per page for fast loading and smooth navigation
+- Next/Previous buttons and current page indicator
+- Dynamic totals update as you navigate
+- Search and sort are preserved across pages
+- Designed for scalability with thousands of records
+
+### One-Click Backup Button
+A new backup button is available at the top of the Admin tab:
+- Instantly creates a zip archive of the `data/` folder
+- Retains only the last N backups (configurable)
+- Shows a confirmation message on success
+- Uses the application's themed button style for visibility and consistency
+- No manual file copying required—just one click for peace of mind
+
+### UI/UX Enhancements
+- All admin actions are grouped at the top of the Admin tab for easy access
+- Themed buttons are now used throughout the application for a consistent look
+- Improved error messages and validation in forms (e.g., sales entry, VAT)
+- Backup button is always visible and styled for clarity
+
+These improvements make the application more robust, user-friendly, and scalable for growing datasets and business needs.
+
 ### Project Structure
 ```
 main.py               # Application entry point

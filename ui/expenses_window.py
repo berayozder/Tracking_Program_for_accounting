@@ -7,6 +7,105 @@ from .theme import apply_theme, maximize_window, themed_button
 
 
 def open_expenses_window(root):
+
+    # --- Paginated Table Section ---
+    table_frame = ttk.LabelFrame(window, text="Expenses Table (Paginated)", padding=8)
+    table_frame.pack(fill='both', expand=True, padx=8, pady=8)
+
+    table_cols = ["date", "category", "amount", "vat", "gross", "notes"]
+    tree = ttk.Treeview(table_frame, columns=table_cols, show="headings", height=12)
+    for col in table_cols:
+        tree.heading(col, text=col.title())
+        tree.column(col, width=100, minwidth=60)
+    tree.pack(fill='both', expand=True, side='top')
+
+    # Pagination controls
+    pag_frame = ttk.Frame(table_frame)
+    pag_frame.pack(fill='x', pady=4)
+    prev_btn = ttk.Button(pag_frame, text="Previous")
+    next_btn = ttk.Button(pag_frame, text="Next")
+    page_lbl = ttk.Label(pag_frame, text="Page 1")
+    prev_btn.pack(side='left', padx=4)
+    page_lbl.pack(side='left', padx=8)
+    next_btn.pack(side='left', padx=4)
+
+    # Totals label
+    totals_var = tk.StringVar(value="")
+    totals_lbl = ttk.Label(table_frame, textvariable=totals_var, font=("", 10, "bold"))
+    totals_lbl.pack(anchor='w', pady=(4,0))
+
+    # Pagination state
+    page_size = 50
+    page_num = [1]  # mutable for closure
+    last_search = [""]
+
+    def fetch_expenses_page(page, search=""):
+        offset = (page-1) * page_size
+        rows = db.get_expenses(limit=page_size, offset=offset)
+        # If search, filter in-memory (for now)
+        if search:
+            search_l = search.lower()
+            rows = [r for r in rows if search_l in str(r.get('category','')).lower() or search_l in str(r.get('notes','')).lower()]
+        return rows
+
+    def update_table():
+        tree.delete(*tree.get_children())
+        search = last_search[0]
+        rows = fetch_expenses_page(page_num[0], search)
+        net_total = vat_total = gross_total = 0.0
+        for r in rows:
+            # Compute VAT/gross if not present
+            try:
+                amount = float(r.get('amount', 0) or 0)
+                vat_rate = float(r.get('vat_rate', 0) or 0)
+                is_incl = int(r.get('is_vat_inclusive', 0) or 0)
+                if is_incl:
+                    net = amount / (1 + vat_rate/100)
+                    vat = amount - net
+                    gross = amount
+                else:
+                    net = amount
+                    vat = amount * vat_rate/100
+                    gross = amount + vat
+            except Exception:
+                net = amount = vat = gross = 0.0
+            tree.insert('', 'end', values=(r.get('date',''), r.get('category',''), f"{amount:.2f}", f"{vat:.2f}", f"{gross:.2f}", r.get('notes','')))
+            net_total += net
+            vat_total += vat
+            gross_total += gross
+        totals_var.set(f"Net: {net_total:.2f}   VAT: {vat_total:.2f}   Gross: {gross_total:.2f}")
+        page_lbl.config(text=f"Page {page_num[0]}")
+
+    def go_prev():
+        if page_num[0] > 1:
+            page_num[0] -= 1
+            update_table()
+
+    def go_next():
+        # Only advance if there are more rows
+        search = last_search[0]
+        rows = fetch_expenses_page(page_num[0]+1, search)
+        if rows:
+            page_num[0] += 1
+            update_table()
+
+    prev_btn.config(command=go_prev)
+    next_btn.config(command=go_next)
+
+    # Search entry for table
+    search_frame = ttk.Frame(table_frame)
+    search_frame.pack(fill='x', pady=(0,4))
+    search_var = tk.StringVar()
+    search_entry = ttk.Entry(search_frame, textvariable=search_var, width=24)
+    search_entry.pack(side='left', padx=(0,8))
+    def do_search(*a):
+        last_search[0] = search_var.get().strip()
+        page_num[0] = 1
+        update_table()
+    ttk.Button(search_frame, text="Search", command=do_search).pack(side='left')
+    search_entry.bind('<Return>', do_search)
+
+    update_table()
     db.init_db()
 
     window = tk.Toplevel(root)

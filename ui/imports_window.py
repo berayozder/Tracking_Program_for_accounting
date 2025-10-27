@@ -12,12 +12,6 @@ def ensure_db():
 
 
 def open_imports_window(root):
-
-    ensure_db()
-    # Debug: Check DAO function availability
-    print("db.add_import:", getattr(db, 'add_import', None))
-    print("db.get_imports:", getattr(db, 'get_imports', None))
-
     window = tk.Toplevel(root)
     window.title("Record Import")
     window.geometry("500x600")
@@ -33,6 +27,11 @@ def open_imports_window(root):
         maximize_window(window)
     except Exception:
         pass
+
+    ensure_db()
+    # Debug: Check DAO function availability
+    print("db.add_import:", getattr(db, 'add_import', None))
+    print("db.get_imports:", getattr(db, 'get_imports', None))
 
     # Use a scrollable canvas for the form so bottom buttons remain visible
     content_outer = ttk.Frame(window)

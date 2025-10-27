@@ -529,6 +529,32 @@ def open_sales_window(root):
     # Product IDs are auto-generated; no manual entry widget
 
     def save_sale():
+        # --- Stronger validation for required fields ---
+        # VAT rate required
+        vat_rate_val = vat_rate_var.get().strip()
+        if not vat_rate_val:
+            messagebox.showerror('Missing VAT Rate', 'KDV Oranı (VAT Rate) is required.')
+            return
+        try:
+            float(vat_rate_val.replace(',', '.'))
+        except Exception:
+            messagebox.showerror('Invalid VAT Rate', 'KDV Oranı geçerli bir sayı olmalı (örn: 18)')
+            return
+
+        # Customer required
+        customer_name = customer_e.get().strip()
+        if not customer_name:
+            messagebox.showerror('Missing Customer', 'Customer is required. Please select or enter a customer.')
+            return
+
+        # Product/category required
+        if not cat:
+            messagebox.showerror('Missing Category', 'Category is required.')
+            return
+        if not sub:
+            messagebox.showerror('Missing Subcategory', 'Subcategory is required.')
+            return
+
         d = date_e.get().strip()
         try:
             datetime.strptime(d, '%Y-%m-%d')
