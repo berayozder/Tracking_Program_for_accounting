@@ -23,6 +23,18 @@ from ui.backup_window import open_backup_window
 from ui.settings_window import open_settings_window
 from ui.trash_window import open_trash_window
 
+# Global shutdown flag
+app_exiting = False
+
+def safe_shutdown(root):
+    global app_exiting
+    if app_exiting:
+        return
+    app_exiting = True
+    try:
+        root.destroy()
+    except Exception:
+        pass
 
 def main():
     db.init_db()
@@ -31,31 +43,25 @@ def main():
     root.geometry("980x720")
     root.minsize(880, 600)
     apply_theme(root)
-    # Global keyboard shortcuts (Ctrl/Cmd + A/C/X/V, S, Q, Esc)
     install_basic_shortcuts(root)
     try:
         maximize_window(root)
     except Exception:
         pass
-    # Ensure base currency is configured on first run. Keep this simple: ask once with a small prompt.
     try:
         from db import get_setting, set_setting
-        # Only prompt if base_currency is not defined or is an empty string
         try:
             _base = get_setting('base_currency')
         except Exception:
             _base = None
         if not _base or not str(_base).strip():
             try:
-                # Set classic and themed button colors. Use white bg for classic Button (Cancel)
                 root.option_add('*Button.background', '#1E90FF')
                 root.option_add('*Button.foreground', '#1E90FF')
                 root.option_add('*TButton.background', '#1E90FF')
                 root.option_add('*TButton.foreground', '#1E90FF')
-                
             except Exception:
                 pass
-            # Minimal modal: Save (themed) + Cancel (white bordered) so Cancel text is visible
             try:
                 dlg = tk.Toplevel(root); dlg.transient(root); dlg.grab_set()
                 ttk.Label(dlg, text='Enter base currency (e.g. USD):').pack(padx=12, pady=(12,0))
@@ -72,7 +78,6 @@ def main():
                     except Exception: pass
                 frm = ttk.Frame(dlg); frm.pack(fill='x', padx=12, pady=(0,12))
                 themed_button(frm, text='Save', variant='primary', command=_save).pack(side='left')
-                # Use a small framed Label as a clickable Cancel control so text is always visible on macOS
                 _cf = tk.Frame(frm, bg='white', bd=1, relief='solid')
                 _cl = tk.Label(_cf, text='Cancel', bg='white', fg='#222')
                 _cl.pack(padx=10, pady=6)
@@ -89,14 +94,11 @@ def main():
         pass
 
     if not open_login_dialog(root):
-        try:
-            root.destroy()
-        except tk.TclError:
-            pass
+        safe_shutdown(root)
         return
     menubar = tk.Menu(root)
     file_menu = tk.Menu(menubar, tearoff=0)
-    file_menu.add_command(label="Exit", command=root.destroy)
+    file_menu.add_command(label="Exit", command=lambda: safe_shutdown(root))
     menubar.add_cascade(label="File", menu=file_menu)
     reports_menu = tk.Menu(menubar, tearoff=0)
     reports_menu.add_command(label="Batch Analytics", command=lambda: open_batch_analytics_window(root))
@@ -106,34 +108,9 @@ def main():
     help_menu.add_command(label="About", command=lambda: messagebox.showinfo("About", "Product Tracker"))
     menubar.add_cascade(label="Help", menu=help_menu)
     root.config(menu=menubar)
-    container = ttk.Frame(root, padding=(16, 16, 16, 8))
-    container.pack(fill='both', expand=True)
-    header = ttk.Frame(container)
-    header.pack(fill='x', pady=(0, 16))
-    ttk.Label(header, text="Product Tracking Program", font=("Arial", 20, "bold")).pack(anchor='w')
-    ttk.Label(header, text="Manage imports, inventory, sales, expenses, and returns", font=("Arial", 10), foreground="#555").pack(anchor='w', pady=(4, 0))
-    # Persistent top navigation toolbar
-    toolbar = ttk.Frame(container)
-    toolbar.pack(fill='x', pady=(0, 12))
-    themed_button(toolbar, text='➕ Import', variant='primary', command=lambda: open_imports_window(root)).pack(side='left', padx=(0, 6))
-    themed_button(toolbar, text='🛒 Sale', variant='primary', command=lambda: open_sales_window(root)).pack(side='left', padx=6)
-    themed_button(toolbar, text='💸 Expense', variant='primary', command=lambda: open_expenses_window(root)).pack(side='left', padx=6)
-    themed_button(toolbar, text='📦 Inventory', variant='secondary', command=lambda: open_view_inventory_window(root)).pack(side='left', padx=6)
-    themed_button(toolbar, text='📊 Analytics', variant='secondary', command=lambda: open_batch_analytics_window(root)).pack(side='left', padx=6)
-    themed_button(toolbar, text='⚙️ Settings', variant='secondary', command=lambda: open_settings_window(root)).pack(side='left', padx=6)
-    themed_button(toolbar, text='🔐 Audit Log', variant='secondary', command=lambda: open_audit_log_window(root)).pack(side='left', padx=6)
-    # Spacer
-    ttk.Label(toolbar, text='').pack(side='left', expand=True, fill='x')
-    themed_button(toolbar, text='💾 Backup', variant='secondary', command=lambda: open_backup_window(root)).pack(side='right', padx=6)
-    themed_button(toolbar, text='🔁 Returns', variant='secondary', command=lambda: open_view_returns_window(root)).pack(side='right', padx=6)
-    stats_frame = ttk.LabelFrame(container, text="Quick Stats", padding=12, style='TLabelframe')
-    stats_frame.pack(fill='x', pady=(0, 16))
-    stats_left = ttk.Frame(stats_frame)
-    stats_left.pack(side='left', fill='x', expand=True)
-    ttk.Label(stats_left, text="📊 Dashboard", font=("Arial", 9, "bold")).pack(side='left', padx=(0, 20))
-    ttk.Label(stats_left, text="Recent Activity: View your latest transactions", foreground="#666", font=("Arial", 9)).pack(side='left')
-    ttk.Separator(container, orient='horizontal').pack(fill='x', pady=(0, 16))
-    notebook = ttk.Notebook(container)
+
+    # --- Notebook/tabbed interface ---
+    notebook = ttk.Notebook(root)
     notebook.pack(fill='both', expand=True)
     tab_home = ttk.Frame(notebook, padding=12)
     tab_imports = ttk.Frame(notebook, padding=12)
@@ -145,102 +122,84 @@ def main():
     notebook.add(tab_sales, text='💰 Sales')
     notebook.add(tab_expenses, text='💳 Expenses')
     notebook.add(tab_admin, text='⚙️ Admin')
-    # Scrollable container for home sections to ensure bottom buttons remain visible
-    home_canvas = tk.Canvas(tab_home, highlightthickness=0)
-    vsb = ttk.Scrollbar(tab_home, orient='vertical', command=home_canvas.yview)
-    home_wrapper = ttk.Frame(home_canvas)
-    def _on_configure(event):
-        home_canvas.configure(scrollregion=home_canvas.bbox('all'))
-    home_wrapper.bind('<Configure>', _on_configure)
-    home_canvas.create_window((0,0), window=home_wrapper, anchor='nw')
-    home_canvas.configure(yscrollcommand=vsb.set)
-    home_canvas.pack(side='left', fill='both', expand=True)
-    vsb.pack(side='right', fill='y')
-    sections = ttk.Frame(home_wrapper)
-    sections.pack(fill='both', expand=True, padx=4, pady=4)
-    # Mousewheel support
-    def _on_mousewheel(event):
-        home_canvas.yview_scroll(int(-1*(event.delta/120)), 'units')
-    home_canvas.bind_all('<MouseWheel>', _on_mousewheel)
-    HOME_BTN_WIDTH = 24  # consistent wider buttons
-    sec_ii = ttk.LabelFrame(sections, text="📦 Imports & Inventory", padding=16, style='TLabelframe')
-    sec_ii.grid(row=0, column=0, sticky='nsew', padx=(0, 12), pady=(0, 12))
-    sec_ii.columnconfigure(0, weight=1)
-    themed_button(sec_ii, text="➕ Record Import", variant='primary', command=lambda: open_imports_window(root)).grid(row=0, column=0, sticky='ew', pady=(0, 8))
-    themed_button(sec_ii, text="📄 View Imports", variant='secondary', command=lambda: open_view_imports_window(root)).grid(row=1, column=0, sticky='ew', pady=4)
-    themed_button(sec_ii, text="📦 View Inventory", variant='secondary', command=lambda: open_view_inventory_window(root)).grid(row=2, column=0, sticky='ew', pady=(4, 0))
-    sec_sr = ttk.LabelFrame(sections, text="💰 Sales & Returns", padding=16, style='TLabelframe')
-    sec_sr.grid(row=0, column=1, sticky='nsew', padx=(12, 0), pady=(0, 12))
-    sec_sr.columnconfigure(0, weight=1)
-    themed_button(sec_sr, text="🛒 Record Sale", variant='primary', command=lambda: open_sales_window(root)).grid(row=0, column=0, sticky='ew', pady=(0, 8))
-    themed_button(sec_sr, text="🧾 View Sales", variant='secondary', command=lambda: open_view_sales_window(root)).grid(row=1, column=0, sticky='ew', pady=4)
-    themed_button(sec_sr, text="↩️ View Returns", variant='secondary', command=lambda: open_view_returns_window(root)).grid(row=2, column=0, sticky='ew', pady=(4, 0))
-    sec_ex = ttk.LabelFrame(sections, text="💳 Expenses", padding=16, style='TLabelframe')
-    sec_ex.grid(row=1, column=0, sticky='nsew', padx=(0, 12), pady=(0, 12))
-    sec_ex.columnconfigure(0, weight=1)
-    themed_button(sec_ex, text="💸 Record Expense", variant='primary', command=lambda: open_expenses_window(root)).grid(row=0, column=0, sticky='ew', pady=(0, 8))
-    themed_button(sec_ex, text="📑 View Expenses", variant='secondary', command=lambda: open_view_expenses_window(root)).grid(row=1, column=0, sticky='ew', pady=(4, 0))
-    sec_ad = ttk.LabelFrame(sections, text="⚙️ Administration", padding=16, style='TLabelframe')
-    sec_ad.grid(row=1, column=1, sticky='nsew', padx=(12, 0), pady=(0, 12))
-    sec_ad.columnconfigure(0, weight=1)
-    themed_button(sec_ad, text="📊 Batch Analytics", variant='primary', command=lambda: open_batch_analytics_window(root)).grid(row=0, column=0, sticky='ew', pady=(0, 8))
-    themed_button(sec_ad, text="👥 Manage Customers", variant='secondary', command=lambda: open_customers_window(root)).grid(row=1, column=0, sticky='ew', pady=(4, 8))
-    themed_button(sec_ad, text="🏢 Manage Suppliers", variant='secondary', command=lambda: open_suppliers_window(root)).grid(row=2, column=0, sticky='ew', pady=(0, 8))
-    themed_button(sec_ad, text="📈 Monthly/Yearly Analysis", variant='secondary', command=lambda: open_monthly_yearly_analytics_window(root)).grid(row=3, column=0, sticky='ew', pady=(0, 8))
-    themed_button(sec_ad, text="🔢 Manage Product Codes", variant='secondary', command=lambda: open_manage_product_codes_window(root)).grid(row=4, column=0, sticky='ew', pady=(4, 0))
-    themed_button(sec_ad, text="Audit Log", variant='secondary', command=lambda: open_audit_log_window(root)).grid(row=5, column=0, sticky='ew', pady=(8, 8))
-    themed_button(sec_ad, text="Backup/Restore", variant='secondary', command=lambda: open_backup_window(root)).grid(row=6, column=0, sticky='ew')
-    sections.columnconfigure(0, weight=1)
-    sections.columnconfigure(1, weight=1)
-    sections.rowconfigure(0, weight=1)
-    sections.rowconfigure(1, weight=1)
-    # Populate Imports tab with its own buttons
-    imports_panel = ttk.Frame(tab_imports)
-    imports_panel.pack(fill='both', expand=True, padx=8, pady=8)
-    ttk.Label(imports_panel, text="Imports", font=("Arial", 14, 'bold')).pack(anchor='w', pady=(0, 8))
-    imp_btns = ttk.Frame(imports_panel)
-    imp_btns.pack(fill='x')
-    themed_button(imp_btns, text='➕ Record Import', variant='primary', width=HOME_BTN_WIDTH, command=lambda: open_imports_window(root)).pack(side='left', padx=(0, 6))
-    themed_button(imp_btns, text='📄 View Imports', variant='secondary', width=HOME_BTN_WIDTH, command=lambda: open_view_imports_window(root)).pack(side='left', padx=6)
-    themed_button(imp_btns, text='📦 View Inventory', variant='secondary', width=HOME_BTN_WIDTH, command=lambda: open_view_inventory_window(root)).pack(side='left', padx=6)
 
-    # Populate Sales tab
-    sales_panel = ttk.Frame(tab_sales)
-    sales_panel.pack(fill='both', expand=True, padx=8, pady=8)
-    ttk.Label(sales_panel, text="Sales", font=("Arial", 14, 'bold')).pack(anchor='w', pady=(0, 8))
-    sales_btns = ttk.Frame(sales_panel)
-    sales_btns.pack(fill='x')
-    themed_button(sales_btns, text='🛒 Record Sale', variant='primary', width=HOME_BTN_WIDTH, command=lambda: open_sales_window(root)).pack(side='left', padx=(0, 6))
-    themed_button(sales_btns, text='🧾 View Sales', variant='secondary', width=HOME_BTN_WIDTH, command=lambda: open_view_sales_window(root)).pack(side='left', padx=6)
-    themed_button(sales_btns, text='↩️ View Returns', variant='secondary', width=HOME_BTN_WIDTH, command=lambda: open_view_returns_window(root)).pack(side='left', padx=6)
+    # Example Home tab content with ALL main actions
+    ttk.Label(tab_home, text="Welcome to Product Tracker!", font=("Arial", 16, "bold")).pack(pady=16)
 
-    # Populate Expenses tab
-    expenses_panel = ttk.Frame(tab_expenses)
-    expenses_panel.pack(fill='both', expand=True, padx=8, pady=8)
-    ttk.Label(expenses_panel, text="Expenses", font=("Arial", 14, 'bold')).pack(anchor='w', pady=(0, 8))
-    exp_btns = ttk.Frame(expenses_panel)
-    exp_btns.pack(fill='x')
-    themed_button(exp_btns, text='💸 Record Expense', variant='primary', width=HOME_BTN_WIDTH, command=lambda: open_expenses_window(root)).pack(side='left', padx=(0, 6))
-    themed_button(exp_btns, text='📑 View Expenses', variant='secondary', width=HOME_BTN_WIDTH, command=lambda: open_view_expenses_window(root)).pack(side='left', padx=6)
+    # Improved Home tab layout: grouped, 2-column, grid-based
+    home_container = ttk.Frame(tab_home)
+    home_container.pack(fill='both', expand=True, padx=12, pady=12)
 
-    # Populate Admin tab
-    admin_panel = ttk.Frame(tab_admin)
-    admin_panel.pack(fill='both', expand=True, padx=8, pady=8)
-    ttk.Label(admin_panel, text="Administration", font=("Arial", 14, 'bold')).pack(anchor='w', pady=(0, 8))
-    admin_btns = ttk.Frame(admin_panel)
-    admin_btns.pack(fill='x')
-    themed_button(admin_btns, text='\u2699\ufe0f Settings', variant='secondary', width=HOME_BTN_WIDTH, command=lambda: open_settings_window(root)).pack(side='left', padx=(0, 6))
-    themed_button(admin_btns, text='🔢 Product Codes', variant='secondary', width=HOME_BTN_WIDTH, command=lambda: open_manage_product_codes_window(root)).pack(side='left', padx=6)
-    themed_button(admin_btns, text='👥 Customers', variant='secondary', width=HOME_BTN_WIDTH, command=lambda: open_customers_window(root)).pack(side='left', padx=6)
-    themed_button(admin_btns, text='🏢 Suppliers', variant='secondary', width=HOME_BTN_WIDTH, command=lambda: open_suppliers_window(root)).pack(side='left', padx=6)
-    themed_button(admin_btns, text='📊 Batch Analytics', variant='primary', width=HOME_BTN_WIDTH, command=lambda: open_batch_analytics_window(root)).pack(side='left', padx=6)
-    themed_button(admin_btns, text='📈 Monthly/Yearly', variant='secondary', width=HOME_BTN_WIDTH, command=lambda: open_monthly_yearly_analytics_window(root)).pack(side='left', padx=6)
-    themed_button(admin_btns, text='Audit Log', variant='secondary', width=HOME_BTN_WIDTH, command=lambda: open_audit_log_window(root)).pack(side='left', padx=6)
-    themed_button(admin_btns, text='Backup/Restore', variant='secondary', width=HOME_BTN_WIDTH, command=lambda: open_backup_window(root)).pack(side='left', padx=6)
-    themed_button(admin_btns, text='🗑️ Trash', variant='secondary', width=HOME_BTN_WIDTH, command=lambda: open_trash_window(root)).pack(side='left', padx=6)
+    # Section: Imports & Inventory
+    imports_frame = ttk.LabelFrame(home_container, text="📦 Imports & Inventory", padding=16)
+    imports_frame.grid(row=0, column=0, sticky='nsew', padx=(0, 16), pady=(0, 16))
+    themed_button(imports_frame, text='➕ Record Import', command=lambda: open_imports_window(root)).grid(row=0, column=0, sticky='ew', pady=4)
+    themed_button(imports_frame, text='📄 View Imports', command=lambda: open_view_imports_window(root)).grid(row=1, column=0, sticky='ew', pady=4)
+    themed_button(imports_frame, text='📦 View Inventory', command=lambda: open_view_inventory_window(root)).grid(row=2, column=0, sticky='ew', pady=4)
 
+    # Section: Sales & Returns
+    sales_frame = ttk.LabelFrame(home_container, text="💰 Sales & Returns", padding=16)
+    sales_frame.grid(row=0, column=1, sticky='nsew', padx=(0, 0), pady=(0, 16))
+    themed_button(sales_frame, text='🛒 Record Sale', command=lambda: open_sales_window(root)).grid(row=0, column=0, sticky='ew', pady=4)
+    themed_button(sales_frame, text='🧾 View Sales', command=lambda: open_view_sales_window(root)).grid(row=1, column=0, sticky='ew', pady=4)
+    themed_button(sales_frame, text='↩️ View Returns', command=lambda: open_view_returns_window(root)).grid(row=2, column=0, sticky='ew', pady=4)
+
+    # Section: Expenses
+    expenses_frame = ttk.LabelFrame(home_container, text="💳 Expenses", padding=16)
+    expenses_frame.grid(row=1, column=0, sticky='nsew', padx=(0, 16), pady=(0, 16))
+    themed_button(expenses_frame, text='💸 Record Expense', command=lambda: open_expenses_window(root)).grid(row=0, column=0, sticky='ew', pady=4)
+    themed_button(expenses_frame, text='📑 View Expenses', command=lambda: open_view_expenses_window(root)).grid(row=1, column=0, sticky='ew', pady=4)
+
+    # Section: Analytics & Codes
+    analytics_frame = ttk.LabelFrame(home_container, text="📊 Analytics & Codes", padding=16)
+    analytics_frame.grid(row=1, column=1, sticky='nsew', padx=(0, 0), pady=(0, 16))
+    themed_button(analytics_frame, text='📊 Batch Analytics', command=lambda: open_batch_analytics_window(root)).grid(row=0, column=0, sticky='ew', pady=4)
+    themed_button(analytics_frame, text='📈 Monthly/Yearly Analysis', command=lambda: open_monthly_yearly_analytics_window(root)).grid(row=1, column=0, sticky='ew', pady=4)
+    themed_button(analytics_frame, text='🔢 Manage Product Codes', command=lambda: open_manage_product_codes_window(root)).grid(row=2, column=0, sticky='ew', pady=4)
+
+    # Section: Admin & Other
+    admin_frame = ttk.LabelFrame(home_container, text="⚙️ Admin & Other", padding=16)
+    admin_frame.grid(row=2, column=0, columnspan=2, sticky='nsew', padx=0, pady=(0, 0))
+    themed_button(admin_frame, text='👥 Manage Customers', command=lambda: open_customers_window(root)).grid(row=0, column=0, sticky='ew', pady=4, padx=(0, 8))
+    themed_button(admin_frame, text='🏢 Manage Suppliers', command=lambda: open_suppliers_window(root)).grid(row=0, column=1, sticky='ew', pady=4, padx=(8, 0))
+    themed_button(admin_frame, text='⚙️ Settings', command=lambda: open_settings_window(root)).grid(row=1, column=0, sticky='ew', pady=4, padx=(0, 8))
+    themed_button(admin_frame, text='Audit Log', command=lambda: open_audit_log_window(root)).grid(row=1, column=1, sticky='ew', pady=4, padx=(8, 0))
+    themed_button(admin_frame, text='Backup/Restore', command=lambda: open_backup_window(root)).grid(row=2, column=0, sticky='ew', pady=4, padx=(0, 8))
+    themed_button(admin_frame, text='🗑️ Trash', command=lambda: open_trash_window(root)).grid(row=2, column=1, sticky='ew', pady=4, padx=(8, 0))
+
+    # Make columns expand evenly
+    home_container.columnconfigure(0, weight=1)
+    home_container.columnconfigure(1, weight=1)
+    admin_frame.columnconfigure(0, weight=1)
+    admin_frame.columnconfigure(1, weight=1)
+
+    # Example Imports tab content
+    themed_button(tab_imports, text='Record Import', command=lambda: open_imports_window(root)).pack(pady=8)
+    themed_button(tab_imports, text='View Imports', command=lambda: open_view_imports_window(root)).pack(pady=8)
+    themed_button(tab_imports, text='View Inventory', command=lambda: open_view_inventory_window(root)).pack(pady=8)
+
+    # Example Sales tab content
+    themed_button(tab_sales, text='Record Sale', command=lambda: open_sales_window(root)).pack(pady=8)
+    themed_button(tab_sales, text='View Sales', command=lambda: open_view_sales_window(root)).pack(pady=8)
+    themed_button(tab_sales, text='View Returns', command=lambda: open_view_returns_window(root)).pack(pady=8)
+
+    # Example Expenses tab content
+    themed_button(tab_expenses, text='Record Expense', command=lambda: open_expenses_window(root)).pack(pady=8)
+    themed_button(tab_expenses, text='View Expenses', command=lambda: open_view_expenses_window(root)).pack(pady=8)
+
+    # Example Admin tab content
+    themed_button(tab_admin, text='Settings', command=lambda: open_settings_window(root)).pack(pady=8)
+    themed_button(tab_admin, text='Product Codes', command=lambda: open_manage_product_codes_window(root)).pack(pady=8)
+    themed_button(tab_admin, text='Customers', command=lambda: open_customers_window(root)).pack(pady=8)
+    themed_button(tab_admin, text='Suppliers', command=lambda: open_suppliers_window(root)).pack(pady=8)
+    themed_button(tab_admin, text='Batch Analytics', command=lambda: open_batch_analytics_window(root)).pack(pady=8)
+    themed_button(tab_admin, text='Monthly/Yearly', command=lambda: open_monthly_yearly_analytics_window(root)).pack(pady=8)
+    themed_button(tab_admin, text='Audit Log', command=lambda: open_audit_log_window(root)).pack(pady=8)
+    themed_button(tab_admin, text='Backup/Restore', command=lambda: open_backup_window(root)).pack(pady=8)
+    themed_button(tab_admin, text='Trash', command=lambda: open_trash_window(root)).pack(pady=8)
+
+    root.protocol("WM_DELETE_WINDOW", lambda: safe_shutdown(root))
     root.mainloop()
-
 
 if __name__ == '__main__':  # pragma: no cover
     main()

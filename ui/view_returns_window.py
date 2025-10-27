@@ -257,6 +257,40 @@ def open_view_returns_window(root):
         if any_done:
             refresh()
 
+    def do_undo_return():
+        sel = tree.selection()
+        if not sel:
+            messagebox.showwarning('Select', 'Select at least one row first')
+            return
+        count = len(sel)
+        if not messagebox.askyesno('Confirm', f'Undo {count} selected returns?'):
+            return
+        any_done = False
+        from db.imports_dao import undo_return_batch_allocation
+        for iid in sel:
+            try:
+                rid = int(iid)
+            except Exception:
+                continue
+            try:
+                # Undo batch allocation
+                if undo_return_batch_allocation(rid):
+                    # Mark the return row as deleted
+                    try:
+                        db_delete_return(rid)
+                    except Exception:
+                        pass
+                    any_done = True
+            except Exception:
+                continue
+        if any_done:
+            refresh()
+            # Emit a virtual event so other windows (e.g., sales) can refresh
+            try:
+                win.event_generate('<<ReturnUndone>>')
+            except Exception:
+                pass
+
     def get_selected_index():
         sel = tree.selection()
         if not sel:
@@ -604,16 +638,10 @@ def open_view_returns_window(root):
         themed_button(container, text='Save & Close', variant='primary', command=save_and_close).pack(pady=(8,0))
 
     btn_frame = ttk.Frame(win)
-    themed_button(btn_frame, text='Refresh', variant='primary', command=refresh).pack(side=tk.LEFT, padx=6)
-    themed_button(btn_frame, text='Select All', variant='primary', command=select_all).pack(side=tk.LEFT, padx=6)
-    def deselect_all():
-        try:
-            tree.selection_remove(tree.get_children(''))
-        except Exception:
-            pass
-    themed_button(btn_frame, text='Deselect All', variant='primary', command=deselect_all).pack(side=tk.LEFT, padx=6)
-    themed_button(btn_frame, text='⬇️ Export CSV', variant='secondary', command=do_export_csv).pack(side=tk.LEFT, padx=6)
-    themed_button(btn_frame, text='Edit', variant='success', command=do_edit).pack(side=tk.LEFT, padx=6)
-    themed_button(btn_frame, text='Delete', variant='danger', command=do_delete).pack(side=tk.LEFT, padx=6)
-    themed_button(btn_frame, text='📂 Documents', variant='secondary', command=do_manage_docs).pack(side=tk.LEFT, padx=6)
     btn_frame.pack(fill='x', pady=8)
+    themed_button(btn_frame, text='Export CSV', command=do_export_csv).pack(side=tk.LEFT, padx=4)
+    themed_button(btn_frame, text='Edit', command=do_edit).pack(side=tk.LEFT, padx=4)
+    themed_button(btn_frame, text='Delete', command=do_delete).pack(side=tk.LEFT, padx=4)
+    themed_button(btn_frame, text='Undelete', command=do_undelete).pack(side=tk.LEFT, padx=4)
+    themed_button(btn_frame, text='Undo Return', command=do_undo_return, variant='danger').pack(side=tk.LEFT, padx=4)
+    themed_button(btn_frame, text='Manage Docs', command=do_manage_docs).pack(side=tk.LEFT, padx=4)

@@ -1224,3 +1224,8 @@ def open_view_sales_window(root):
 
     # Bind filters after buttons defined
     return_combo.bind('<<ComboboxSelected>>', on_return_change)
+
+    # Listen for <<ReturnUndone>> event to refresh sales view when a return is undone
+    def on_return_undone(event=None):
+        refresh()
+    win.bind('<<ReturnUndone>>', on_return_undone)

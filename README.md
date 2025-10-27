@@ -253,6 +253,12 @@ CSV compatibility:
   - When enabled, expenses linked to an import are converted to base currency (by date), apportioned evenly per unit across that import’s total original quantity, and added to the effective unit cost
   - Affects batch cost allocated, product total cost, profits, and margins
 
+## New Home Tab Layout
+
+- The Home tab now features all main actions grouped by category (Imports, Sales, Expenses, Analytics, Admin, etc.)
+- Actions are organized in a modern 2-column layout for quick access
+- Each section is clearly labeled for ease of use
+
 ### 🎨 **User Interface Features**
 
 #### **🎛️ Advanced Filtering System**
@@ -481,5 +487,3 @@ FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
 ```
 
 ---
-
-*Last updated: October 2025 | Version 1.0*

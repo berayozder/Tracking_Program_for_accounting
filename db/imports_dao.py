@@ -574,8 +574,10 @@ def get_sale_batch_info(product_id: int) -> List[Dict]:
     Return batch allocation info for a given product_id.
     """
     with get_cursor() as (conn, cur):
+        # Get all sale allocations
         cur.execute('''
             SELECT 
+                sba.id,
                 sba.product_id,
                 sba.sale_date,
                 sba.category,
@@ -595,12 +597,35 @@ def get_sale_batch_info(product_id: int) -> List[Dict]:
         ''', (product_id,))
         rows = [dict(r) for r in cur.fetchall()]
 
+        # Get all returns for this product
+        cur.execute('''
+            SELECT batch_id, SUM(returned_quantity) as total_returned
+            FROM (
+                SELECT batch_id, quantity_from_batch as returned_quantity
+                FROM sale_batch_allocations
+                WHERE product_id = ? AND deleted = 0 AND batch_id IS NOT NULL AND quantity_from_batch < 0
+            )
+            GROUP BY batch_id
+        ''', (product_id,))
+        returns = {r['batch_id']: r['total_returned'] for r in cur.fetchall()}
+
+        # Adjust allocations for returns
+        for row in rows:
+            returned_qty = returns.get(row['batch_id'], 0) if row['batch_id'] is not None else 0
+            net_qty = row['quantity_from_batch'] + returned_qty
+            row['net_quantity'] = net_qty
+            row['net_total_revenue'] = net_qty * row['unit_sale_price']
+            row['net_total_cost'] = net_qty * row['unit_cost']
+            row['net_total_profit'] = net_qty * row['profit_per_unit']
+            row['returned_quantity'] = returned_qty
+
     return rows
 
 
 def handle_return_batch_allocation(
     product_id: int,
-    restock_quantity: float = 1.0
+    restock_quantity: float = 1.0,
+    restock_flag: bool = True
 ) -> List[Dict]:
     """
     Handle restocking inventory by reversing sale batch allocations for returns.
@@ -611,6 +636,7 @@ def handle_return_batch_allocation(
 
     returned_to_batches = []
     remaining_to_return = restock_quantity
+    total_lost_inventory_cost = 0.0
 
     with get_cursor() as (conn, cur):
         cur.execute('''
@@ -634,10 +660,16 @@ def handle_return_batch_allocation(
 
             return_to_batch = min(remaining_to_return, original_allocation)
 
-            cur.execute(
-                'UPDATE import_batches SET remaining_quantity = remaining_quantity + ? WHERE id = ?',
-                (return_to_batch, batch_id)
-            )
+            if restock_flag:
+                cur.execute(
+                    'UPDATE import_batches SET remaining_quantity = remaining_quantity + ? WHERE id = ?',
+                    (return_to_batch, batch_id)
+                )
+            else:
+                # Track lost inventory cost for un-restocked returns
+                total_lost_inventory_cost += return_to_batch * unit_cost
+                # Optionally, update a lost_inventory_cost field in import_batches if you add it to the schema
+                # cur.execute('UPDATE import_batches SET lost_inventory_cost = COALESCE(lost_inventory_cost, 0) + ? WHERE id = ?', (return_to_batch * unit_cost, batch_id))
 
             cur.execute(
                 'SELECT batch_date, supplier, category, subcategory FROM import_batches WHERE id = ?',
@@ -653,11 +685,14 @@ def handle_return_batch_allocation(
                 'category': batch_info['category'] if batch_info else '',
                 'subcategory': batch_info['subcategory'] if batch_info else '',
                 'returned_quantity': return_to_batch,
-                'unit_cost': unit_cost
+                'unit_cost': unit_cost,
+                'lost_inventory_cost': 0.0 if restock_flag else return_to_batch * unit_cost
             })
 
             remaining_to_return -= return_to_batch
 
+    # Optionally, return total lost inventory cost for reporting
+    # returned_to_batches.append({'total_lost_inventory_cost': total_lost_inventory_cost})
     return returned_to_batches
 
 
@@ -876,3 +911,26 @@ def recompute_import_batches(import_id_or_ids, total_expense: float = None):
                         WHERE id=?''', (adjusted_price, unit_cost_base, unit_price, bid))
             conn.commit()
     
+
+def undo_return_batch_allocation(allocation_id: int) -> bool:
+    """
+    Revert a return: mark the sale_batch_allocation as deleted and subtract the restocked quantity from the batch.
+    Returns True if successful.
+    """
+    try:
+        with get_cursor() as (conn, cur):
+            # Get the allocation info
+            cur.execute('SELECT batch_id, quantity_from_batch FROM sale_batch_allocations WHERE id = ?', (allocation_id,))
+            alloc = cur.fetchone()
+            if not alloc:
+                return False
+            batch_id = alloc['batch_id']
+            returned_qty = alloc['quantity_from_batch']
+            # Mark allocation as deleted
+            cur.execute('UPDATE sale_batch_allocations SET deleted = 1 WHERE id = ?', (allocation_id,))
+            # Subtract the restocked quantity from the batch
+            if batch_id is not None and returned_qty:
+                cur.execute('UPDATE import_batches SET remaining_quantity = remaining_quantity - ? WHERE id = ?', (returned_qty, batch_id))
+        return True
+    except Exception:
+        return False
