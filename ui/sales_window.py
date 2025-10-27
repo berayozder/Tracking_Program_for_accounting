@@ -157,12 +157,24 @@ def open_sales_window(root):
     qty_e = ttk.Entry(qty_frame, width=15, font=('', 9))
     qty_e.pack(side='right', anchor='e')
 
+
     # Unit Price row
     price_frame = ttk.Frame(form_section)
     price_frame.pack(fill='x', pady=(0, 12))
     ttk.Label(price_frame, text='Unit Price:', font=('', 9, 'bold')).pack(side='left', anchor='w')
     unit_e = ttk.Entry(price_frame, width=15, font=('', 9))
     unit_e.pack(side='right', anchor='e')
+
+    # --- VAT (KDV) Fields ---
+    vat_frame = ttk.Frame(form_section)
+    vat_frame.pack(fill='x', pady=(0, 12))
+    ttk.Label(vat_frame, text='KDV Oranı (%):', font=('', 9, 'bold')).pack(side='left', anchor='w')
+    vat_rate_var = tk.StringVar(value='18')
+    vat_rate_entry = ttk.Entry(vat_frame, width=8, font=('', 9), textvariable=vat_rate_var)
+    vat_rate_entry.pack(side='left', padx=(8, 0))
+    kdv_dahil_var = tk.IntVar(value=1)
+    kdv_dahil_cb = ttk.Checkbutton(vat_frame, text='KDV Dahil (Fiyat KDV içeriyor)', variable=kdv_dahil_var)
+    kdv_dahil_cb.pack(side='left', padx=(16, 0))
 
     # Sale Currency selector
     from .theme import apply_theme as _ap
@@ -701,6 +713,18 @@ def open_sales_window(root):
                 usd_unit = unit_in_base
             except Exception:
                 usd_unit = unit / fx
+
+            # VAT (KDV) fields
+            try:
+                vat_rate = float(vat_rate_var.get().replace(',', '.')) if vat_rate_var.get().strip() else None
+            except Exception:
+                messagebox.showerror('Invalid VAT', 'KDV Oranı geçerli bir sayı olmalı (örn: 18)')
+                return
+            kdv_dahil = bool(kdv_dahil_var.get())
+            # Compute VAT amount for this unit
+            from core.vat_utils import compute_vat
+            net, vat_amt = compute_vat(unit, vat_rate, kdv_dahil)
+
             append_sale({
                 'Date': d,
                 'Category': cat,
@@ -714,6 +738,9 @@ def open_sales_window(root):
                 'DocumentPath': '',
                 'FXToBase': fx,
                 'SellingPriceBase': usd_unit,
+                'vat_rate': vat_rate,
+                'vat_amount': vat_amt,
+                'is_vat_inclusive': 1 if kdv_dahil else 0,
             })
 
         # Apply inventory reduction after saving sale (batch system handles this automatically)

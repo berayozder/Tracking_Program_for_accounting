@@ -11,6 +11,14 @@ A simple desktop app to track imports, inventory, sales, expenses, returns, and 
 
 ## Recent updates (important)
 
+## VAT (KDV) Support
+
+- **Sales VAT Tracking:** Sales entries now support VAT (KDV) fields, including VAT rate (%) and whether the price is VAT-inclusive. VAT is calculated and stored for each sale.
+- **VAT Analytics:** The Sales view and analytics windows display VAT as a separate layer, showing net, VAT, and gross amounts for each sale, with totals for each.
+- **VAT Reporting:** A dedicated VAT Report window allows you to filter and export VAT data for both expenses and imports, with per-row and total VAT calculations. Reports can be exported to CSV.
+- **UI Features:** VAT columns are visible in the sales analytics table, and VAT breakdowns are included in all relevant exports and reports.
+
+
 - Base currency is now selected once during the application's initial setup and is intentionally locked thereafter to preserve historical accounting data. On first run the app will prompt you to choose the base currency. The Settings window shows the chosen base but will not allow changing it — changing the stored base requires an explicit migration (backup + dry-run + audit) and is not performed automatically.
 
 - Import batches now persist the FX rate and the unit cost in base currency (`fx_to_base` and `unit_cost_base`) at the time of import. The Record Import UI shows a suggested FX rate (from cached historical rates) and allows a manual override which is then persisted with the import batch.
@@ -52,6 +60,7 @@ On first launch you’ll be prompted to create an admin user.
 - Documents: stored as file paths; opened with the OS default app
 
 ## Core concepts
+- VAT (KDV): VAT is tracked on sales (not expenses). Each sale records the VAT rate and whether the price is VAT-inclusive. Analytics and reports show net, VAT, and gross breakdowns for full transparency and compliance.
 - Product IDs: year‑prefixed, category/subcategory coded (auto‑generated)
 - Batch analytics: allocations from imports (FIFO) drive COGS and profit
 - FX handling: amounts normalized to Base Currency using transaction‑date rate

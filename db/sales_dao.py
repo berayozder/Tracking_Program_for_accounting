@@ -31,11 +31,19 @@ def add_sale(row: dict) -> int:
             r = {k.lower(): v for k, v in (row or {}).items()}
             deleted_flag = str(r.get('deleted')).lower()
             deleted_val = 1 if deleted_flag in ('1', 'true', 'yes', 'y') else 0
+            vat_rate = float_or_none(r.get('vat_rate'))
+            vat_amount = float_or_none(r.get('vat_amount'))
+            is_vat_inclusive = r.get('is_vat_inclusive')
+            if is_vat_inclusive is None:
+                is_vat_inclusive = 1
+            else:
+                is_vat_inclusive = 1 if str(is_vat_inclusive).lower() in ('1','true','yes','y') else 0
             cur.execute(
                 '''INSERT INTO sales (
                     date, category, subcategory, quantity, selling_price, platform, product_id,
-                    customer_id, document_path, fx_to_base, selling_price_base, sale_currency, deleted
-                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)''',
+                    customer_id, document_path, fx_to_base, selling_price_base, sale_currency,
+                    vat_rate, vat_amount, is_vat_inclusive, deleted
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
                 (
                     r.get('date', ''),
                     r.get('category', ''),
@@ -49,6 +57,9 @@ def add_sale(row: dict) -> int:
                     float_or_none(r.get('fxtobase') or r.get('fx_to_base')),
                     float_or_none(r.get('sellingpricebase') or r.get('selling_price_base') or r.get('sellingpriceusd')),
                     (r.get('salecurrency') or r.get('sale_currency') or '').upper(),
+                    vat_rate,
+                    vat_amount,
+                    is_vat_inclusive,
                     deleted_val
                 )
             )
@@ -170,7 +181,7 @@ def update_sale(sale_id: int, changes: dict) -> bool:
     allowed = {
         'date', 'category', 'subcategory', 'quantity', 'selling_price', 'platform',
         'product_id', 'customer_id', 'document_path', 'fx_to_base', 'selling_price_base',
-        'sale_currency', 'deleted'
+        'sale_currency', 'vat_rate', 'vat_amount', 'is_vat_inclusive', 'deleted'
     }
 
     sets, params = [], []

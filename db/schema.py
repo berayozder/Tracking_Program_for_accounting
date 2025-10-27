@@ -35,6 +35,10 @@ def init_db_schema(conn):
     add_column_if_missing(cur, 'imports', 'deleted_by TEXT')
     add_column_if_missing(cur, 'imports', 'delete_reason TEXT')
     add_column_if_missing(cur, 'imports', 'fx_to_base REAL')
+    add_column_if_missing(cur, 'imports', 'vat_rate REAL DEFAULT 18.0')
+    add_column_if_missing(cur, 'imports', 'vat_amount REAL DEFAULT 0.0')
+    add_column_if_missing(cur, 'imports', 'is_vat_inclusive INTEGER DEFAULT 1')
+    add_column_if_missing(cur, 'imports', 'document_path TEXT')
 
     cur.execute('''
     CREATE TABLE IF NOT EXISTS import_lines (
@@ -161,6 +165,9 @@ def init_db_schema(conn):
         fx_to_base REAL,
         selling_price_base REAL,
         sale_currency TEXT,
+        vat_rate REAL DEFAULT 18.0,
+        vat_amount REAL DEFAULT 0.0,
+        is_vat_inclusive INTEGER DEFAULT 1,
         deleted INTEGER DEFAULT 0,
         deleted_at TEXT,
         deleted_by TEXT,

@@ -17,6 +17,7 @@ from ui.customers_window import open_customers_window
 from ui.suppliers_window import open_suppliers_window
 from ui.monthly_yearly_analytics_window import open_monthly_yearly_analytics_window
 from ui.theme import apply_theme, maximize_window, themed_button, add_buttons, install_basic_shortcuts
+from ui.vat_report_window import open_vat_report_window
 from ui.login_window import open_login_dialog
 from ui.audit_log_window import open_audit_log_window
 from ui.backup_window import open_backup_window
@@ -103,6 +104,7 @@ def main():
     reports_menu = tk.Menu(menubar, tearoff=0)
     reports_menu.add_command(label="Batch Analytics", command=lambda: open_batch_analytics_window(root))
     reports_menu.add_command(label="Monthly/Yearly Analysis", command=lambda: open_monthly_yearly_analytics_window(root))
+    reports_menu.add_command(label="KDV Raporu (VAT Report)", command=lambda: open_vat_report_window(root))
     menubar.add_cascade(label="Reports", menu=reports_menu)
     help_menu = tk.Menu(menubar, tearoff=0)
     help_menu.add_command(label="About", command=lambda: messagebox.showinfo("About", "Product Tracker"))
@@ -164,8 +166,9 @@ def main():
     themed_button(admin_frame, text='🏢 Manage Suppliers', command=lambda: open_suppliers_window(root)).grid(row=0, column=1, sticky='ew', pady=4, padx=(8, 0))
     themed_button(admin_frame, text='⚙️ Settings', command=lambda: open_settings_window(root)).grid(row=1, column=0, sticky='ew', pady=4, padx=(0, 8))
     themed_button(admin_frame, text='Audit Log', command=lambda: open_audit_log_window(root)).grid(row=1, column=1, sticky='ew', pady=4, padx=(8, 0))
-    themed_button(admin_frame, text='Backup/Restore', command=lambda: open_backup_window(root)).grid(row=2, column=0, sticky='ew', pady=4, padx=(0, 8))
-    themed_button(admin_frame, text='🗑️ Trash', command=lambda: open_trash_window(root)).grid(row=2, column=1, sticky='ew', pady=4, padx=(8, 0))
+    themed_button(admin_frame, text='KDV Raporu (VAT Report)', command=lambda: open_vat_report_window(root)).grid(row=2, column=0, sticky='ew', pady=4, padx=(0, 8))
+    themed_button(admin_frame, text='Backup/Restore', command=lambda: open_backup_window(root)).grid(row=2, column=1, sticky='ew', pady=4, padx=(8, 0))
+    themed_button(admin_frame, text='🗑️ Trash', command=lambda: open_trash_window(root)).grid(row=3, column=0, sticky='ew', pady=4, padx=(0, 8))
 
     # Make columns expand evenly
     home_container.columnconfigure(0, weight=1)

@@ -53,7 +53,17 @@ def open_expenses_window(root):
                                 values=['USD','TRY','EUR','GBP'])
     expense_ccy.pack(side=tk.LEFT, padx=(6, 0))
 
-    # Remove Description; add optional Document attachment
+
+    # --- VAT (KDV) Fields ---
+    ttk.Label(form_parent, text='KDV Oranı (%):').pack(pady=4)
+    vat_rate_var = tk.StringVar(value='18')
+    vat_rate_entry = ttk.Entry(form_parent, width=10, textvariable=vat_rate_var)
+    vat_rate_entry.pack(pady=2)
+
+    kdv_dahil_var = tk.IntVar(value=0)
+    kdv_dahil_cb = ttk.Checkbutton(form_parent, text='KDV Dahil (Fiyat KDV içeriyor)', variable=kdv_dahil_var)
+    kdv_dahil_cb.pack(pady=2)
+
     ttk.Label(form_parent, text='Attach Document (optional):').pack(pady=4)
     doc_frame = ttk.Frame(form_parent)
     doc_entry = ttk.Entry(doc_frame, width=36)
@@ -314,19 +324,30 @@ def open_expenses_window(root):
         except Exception:
             messagebox.showerror('Invalid amount', 'Amount must be a number')
             return
+
         document_path = doc_entry.get().strip()
         is_imp = bool(is_import_var.get())
         selected_import_ids = get_selected_import_ids()
         cat = cat_entry.get().strip()
         notes = notes_entry.get().strip()
+        try:
+            vat_rate = float(vat_rate_var.get().replace(',', '.')) if vat_rate_var.get().strip() else None
+        except Exception:
+            messagebox.showerror('Invalid VAT', 'KDV Oranı geçerli bir sayı olmalı (örn: 18)')
+            return
+        kdv_dahil = bool(kdv_dahil_var.get())
 
         try:
-            print("[DEBUG] About to call db.add_expense")
-            db.add_expense(d, amt, is_imp, None, cat, notes, document_path=document_path, import_ids=selected_import_ids, currency=expense_ccy_var.get())
+            db.add_expense(
+                d, amt, is_imp, vat_rate, cat, notes,
+                document_path=document_path,
+                import_ids=selected_import_ids,
+                currency=expense_ccy_var.get(),
+                vat_inclusive=kdv_dahil
+            )
             messagebox.showinfo('Saved', 'Expense saved')
             window.destroy()
         except Exception as e:
-            print(f"[DEBUG] Exception in save_expense: {e}")
             messagebox.showerror('Error', f'Failed to save expense: {e}')
 
     is_import_var.trace_add('write', lambda *a: on_import_toggle())

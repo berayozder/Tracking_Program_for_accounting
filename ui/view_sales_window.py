@@ -15,8 +15,9 @@ from db.imports_dao import get_sale_batch_info
 
 # Column headers for Treeview / CSV
 DESIRED_COLS = [
-    'Date', 'Category', 'Subcategory', 'Quantity', 'SellingPrice', 
-    'Platform', 'ProductID', 'CustomerID', 'DocumentPath', 
+    'Date', 'Category', 'Subcategory', 'Quantity', 'SellingPrice',
+    'VAT Rate', 'VAT Amount', 'Net', 'Gross',
+    'Platform', 'ProductID', 'CustomerID', 'DocumentPath',
     'FXToBase', 'SellingPriceBase', 'SaleCurrency', 'Deleted'
 ]
 
@@ -42,6 +43,28 @@ def read_returns():
 
 
 def _normalize_row_for_ui(row):
+    # Add VAT analytics fields for display
+    try:
+        vat_rate = float(r.get('vat_rate', 18.0) or 18.0)
+        is_incl = int(r.get('is_vat_inclusive', 1) or 1)
+        amt = float(r.get('selling_price', 0) or 0)
+        if is_incl:
+            net = amt / (1 + vat_rate/100)
+            vat_amt = amt - net
+            gross = amt
+        else:
+            net = amt
+            vat_amt = amt * vat_rate/100
+            gross = amt + vat_amt
+        r['VAT Rate'] = f"{vat_rate:.2f}"
+        r['VAT Amount'] = f"{vat_amt:.2f}"
+        r['Net'] = f"{net:.2f}"
+        r['Gross'] = f"{gross:.2f}"
+    except Exception:
+        r['VAT Rate'] = ''
+        r['VAT Amount'] = ''
+        r['Net'] = ''
+        r['Gross'] = ''
     """Return a copy of the DB row that contains both snake_case and TitleCase keys
     so the legacy UI can read either shape."""
     try:
@@ -81,9 +104,17 @@ def _normalize_row_for_ui(row):
 
 
 def open_view_sales_window(root):
-    import csv
+    # Helper: Select all rows in the treeview
+    def select_all():
+        try:
+            tree.selection_set(tree.get_children())
+        except Exception:
+            pass
+
+    # Helper: Export current table to CSV
     def do_export_csv():
-        # Get displayed rows from the treeview
+        import csv
+        from tkinter import filedialog
         file_path = filedialog.asksaveasfilename(
             defaultextension='.csv',
             filetypes=[('CSV files', '*.csv'), ('All files', '*.*')],
@@ -91,218 +122,118 @@ def open_view_sales_window(root):
         )
         if not file_path:
             return
-        # Get columns
-        columns = [tree.heading(col)['text'] for col in tree['columns']]
-        # Get all rows
-        data = []
-        for iid in tree.get_children():
-            values = tree.item(iid)['values']
-            data.append(values)
         try:
             with open(file_path, 'w', newline='', encoding='utf-8') as f:
                 writer = csv.writer(f)
-                writer.writerow(columns)
-                writer.writerows(data)
+                writer.writerow(cols)
+                for iid in tree.get_children():
+                    vals = tree.item(iid)['values']
+                    writer.writerow(vals)
             messagebox.showinfo('Exported', f'Sales exported to {file_path}')
         except Exception as e:
             messagebox.showerror('Error', f'Failed to export CSV: {e}')
-    rows = [ _normalize_row_for_ui(r) for r in read_sales() ]
-    if not rows:
-        messagebox.showinfo('No data', 'No sales found.')
-        return
 
+
+
+    # --- Variable and widget initialization section ---
     win = tk.Toplevel(root)
-    win.title('💰 View Sales')
-    win.geometry('1020x500')
-    win.minsize(900, 400)
-    try:
-        maximize_window(win)
-    except Exception:
-        pass
+    win.title('View Sales')
+    win.geometry('1200x700')
+    win.transient(root)
+    win.grab_set()
 
-    # Main container with padding
     main_container = ttk.Frame(win, padding=12)
     main_container.pack(fill='both', expand=True)
 
-    # Filter section with improved layout
-    filter_section = ttk.LabelFrame(main_container, text="🔍 Filters", padding=12, style='TLabelframe')
-    filter_section.pack(fill='x', pady=(0, 12))
-    
-    filter_row1 = ttk.Frame(filter_section)
-    filter_row1.pack(fill='x', pady=(0, 8))
-    
-    ttk.Label(filter_row1, text='Warranty (YY):', font=('', 9)).pack(side=tk.LEFT, padx=(0, 6))
+    # Filters and controls
+    filter_frame = ttk.Frame(main_container)
+    filter_frame.pack(fill='x', pady=(0, 8))
+
     year_var = tk.StringVar(value='All')
-    year_combo = ttk.Combobox(filter_row1, textvariable=year_var, state='readonly', width=12)
-    year_combo.pack(side=tk.LEFT, padx=(0, 16))
-    
-    ttk.Label(filter_row1, text='Status:', font=('', 9)).pack(side=tk.LEFT, padx=(0, 6))
-    return_var = tk.StringVar(value='All')
-    return_combo = ttk.Combobox(filter_row1, textvariable=return_var, state='readonly', width=14)
-    return_combo['values'] = ['All', 'Not Returned', 'Returned']
-    return_combo.set('All')
-    return_combo.pack(side=tk.LEFT, padx=(0, 16))
-    
-    ttk.Label(filter_row1, text='Search:', font=('', 9)).pack(side=tk.LEFT, padx=(0, 6))
+    year_combo = ttk.Combobox(filter_frame, textvariable=year_var, width=8, state='readonly')
+    year_combo.pack(side='left', padx=(0, 8))
+
     search_var = tk.StringVar()
-    search_entry = ttk.Entry(filter_row1, textvariable=search_var, width=25, font=('', 9))
-    search_entry.pack(side=tk.LEFT)
+    search_entry = ttk.Entry(filter_frame, textvariable=search_var, width=24)
+    search_entry.pack(side='left', padx=(0, 8))
 
-    cols = DESIRED_COLS
-    
-    # Table container
-    table_frame = ttk.Frame(main_container)
-    table_frame.pack(fill='both', expand=True, pady=(0, 12))
-    
-    tree = ttk.Treeview(table_frame, columns=cols, show='headings', style='Treeview')
-    
-    # Improved column configuration with better widths and alignment
-    col_config = {
-        'Date': {'width': 90, 'anchor': 'center'},
-        'Category': {'width': 120, 'anchor': 'w'},
-        'Subcategory': {'width': 120, 'anchor': 'w'},
-        'Quantity': {'width': 70, 'anchor': 'center'},
-        'SellingPrice': {'width': 90, 'anchor': 'e'},
-    'SaleCurrency': {'width': 80, 'anchor': 'center'},
-    'FXToBase': {'width': 120, 'anchor': 'e'},
-    'SellingPriceBase': {'width': 140, 'anchor': 'e'},
-        'Platform': {'width': 100, 'anchor': 'w'},
-        'ProductID': {'width': 120, 'anchor': 'center'},
-        'CustomerID': {'width': 100, 'anchor': 'center'},
-        'DocumentPath': {'width': 100, 'anchor': 'w'}
-    }
-    
-    for c in cols:
-        config = col_config.get(c, {'width': 100, 'anchor': 'center'})
-        tree.heading(c, text=c)
-        tree.column(c, width=config['width'], anchor=config['anchor'])
-    
-    # Add scrollbars
-    v_scrollbar = ttk.Scrollbar(table_frame, orient='vertical', command=tree.yview)
-    h_scrollbar = ttk.Scrollbar(table_frame, orient='horizontal', command=tree.xview)
-    tree.configure(yscrollcommand=v_scrollbar.set, xscrollcommand=h_scrollbar.set)
-    
-    tree.pack(side='left', fill='both', expand=True)
-    v_scrollbar.pack(side='right', fill='y')
-    h_scrollbar.pack(side='bottom', fill='x')
+    return_var = tk.StringVar(value='All')
+    return_combo = ttk.Combobox(filter_frame, textvariable=return_var, width=10, state='readonly', values=['All', 'Returned', 'Not Returned'])
+    return_combo.pack(side='left', padx=(0, 8))
 
-    # Select All helper and key bindings
-    def select_all(event=None):
-        try:
-            tree.selection_set(tree.get_children(''))
-            return 'break'
-        except Exception:
-            return None
-    try:
-        tree.bind('<Control-a>', select_all)
-        tree.bind('<Command-a>', select_all)  # macOS
-    except Exception:
-        pass
+    show_deleted_var = tk.BooleanVar(value=False)
+    show_deleted_cb = ttk.Checkbutton(filter_frame, text='Show Deleted', variable=show_deleted_var)
+    show_deleted_cb.pack(side='left', padx=(0, 8))
 
-    # Column sorting helper
-    sort_state = {}
+    # Table
+    cols = [
+        'Date', 'Category', 'Subcategory', 'Quantity', 'SellingPrice',
+        'VAT Rate', 'VAT Amount', 'Net', 'Gross',
+        'Platform', 'ProductID', 'CustomerID', 'DocumentPath',
+        'FXToBase', 'SellingPriceBase', 'SaleCurrency', 'Deleted'
+    ]
+    tree = ttk.Treeview(main_container, columns=cols, show='headings', height=20, selectmode='extended')
+    for col in cols:
+        tree.heading(col, text=col)
+        tree.column(col, width=90, minwidth=60)
+    tree.pack(fill='both', expand=True)
 
-    def _coerce_for_sort(col_name, value):
-        v = '' if value is None else str(value)
-        # Try date
-        if col_name.lower().endswith('date') or col_name.lower() in ('date',):
-            from datetime import datetime as _dt
+    # Totals and status
+    totals_var = tk.StringVar(value='')
+    totals_label = ttk.Label(main_container, textvariable=totals_var, font=('', 10, 'bold'))
+    totals_label.pack(fill='x', pady=(8, 0))
+
+    selected_var = tk.StringVar(value='Selected: 0')
+    selected_label = ttk.Label(main_container, textvariable=selected_var, font=('', 9))
+    selected_label.pack(anchor='w', pady=(0, 8))
+
+    # Initial data
+    rows = [ _normalize_row_for_ui(r) for r in read_sales(include_deleted=show_deleted_var.get()) ]
+
+    # Helper filter functions for analytics
+    def compute_year_options(rows):
+        years = set()
+        for r in rows:
             try:
-                return _dt.strptime(v, '%Y-%m-%d')
+                y = str(r.get('Date', '')).split('-')[0]
+                if y and y.isdigit():
+                    years.add(y)
             except Exception:
                 pass
-        # Try numeric
-        try:
-            return float(v)
-        except Exception:
-            return v.lower()
-
-    def sort_by_column(col):
-        # Toggle reverse for this column
-        reverse = sort_state.get(col, False)
-        items = [(iid, tree.item(iid)['values']) for iid in tree.get_children('')]
-        try:
-            idx = cols.index(col)
-        except ValueError:
-            idx = 0
-        items.sort(key=lambda t: _coerce_for_sort(col, t[1][idx] if idx < len(t[1]) else ''), reverse=reverse)
-        for pos, (iid, _) in enumerate(items):
-            tree.move(iid, '', pos)
-        sort_state[col] = not reverse
-
-    # Attach sort commands on headers
-    for c in cols:
-        tree.heading(c, text=c, command=lambda cc=c: sort_by_column(cc))
-
-    # Totals section with Selected badge
-    totals_frame = ttk.Frame(main_container)
-    totals_frame.pack(fill='x', pady=(0, 12))
-    
-    totals_var = tk.StringVar(value='')
-    ttk.Label(totals_frame, text='📊', font=('', 12)).pack(side='left', padx=(0, 6))
-    totals_lbl = ttk.Label(totals_frame, textvariable=totals_var, font=('', 9, 'bold'), 
-                          foreground='#2c3e50')
-    totals_lbl.pack(side='left')
-    selected_var = tk.StringVar(value='Selected: 0')
-    ttk.Label(totals_frame, textvariable=selected_var).pack(side='right')
-
-    # Show deleted toggle
-    show_deleted_var = tk.BooleanVar(value=False)
-    try:
-        cb = ttk.Checkbutton(totals_frame, text='Show deleted', variable=show_deleted_var, command=lambda: refresh())
-        cb.pack(side='right', padx=(8, 0))
-    except Exception:
-        pass
-
-    # Helper to extract 2-digit year prefixes present in data
-    def compute_year_options(all_rows):
-        years = set()
-        for r in all_rows:
-            pid = (r.get('ProductID') or '').strip()
-            if not pid:
-                continue
-            # Backcompat: may contain comma-separated IDs
-            parts = [p.strip() for p in pid.split(',') if p.strip()]
-            for p in parts:
-                if len(p) >= 2 and p[:2].isdigit():
-                    years.add(p[:2])
-        return ['All'] + sorted(years)
+        years = sorted(years, reverse=True)
+        return ['All'] + years
 
     def row_matches_year(r, yy):
         if yy == 'All':
             return True
-        pid = (r.get('ProductID') or '').strip()
-        if not pid:
+        try:
+            return str(r.get('Date', '')).startswith(str(yy))
+        except Exception:
             return False
-        parts = [p.strip() for p in pid.split(',') if p.strip()]
-        for p in parts:
-            if len(p) >= 2 and p[:2] == yy:
-                return True
-        return False
 
     def row_matches_search(r, q):
         if not q:
             return True
-        ql = q.lower()
-        # Search in common fields
-        fields = ['Date', 'Category', 'Subcategory', 'Platform', 'ProductID', 'SellingPrice']
-        for f in fields:
-            v = str(r.get(f, '')).lower()
-            if ql in v:
-                return True
+        q = q.lower()
+        for v in r.values():
+            try:
+                if q in str(v).lower():
+                    return True
+            except Exception:
+                pass
         return False
 
-    def row_matches_returned(r, status, returned_ids):
-        if status == 'All':
-            return True
+    def row_matches_returned(r, return_filter, returned_ids):
         pid = (r.get('ProductID') or '').strip()
-        if status == 'Returned':
+        if return_filter == 'All':
+            return True
+        elif return_filter == 'Returned':
             return pid in returned_ids
-        if status == 'Not Returned':
+        elif return_filter == 'Not Returned':
             return pid not in returned_ids
         return True
 
-    # Load customer name mapping for display
+    # --- Helper functions section (now after all variables/widgets are defined) ---
     def get_customer_name_mapping():
         """Create mapping from customer ID to customer name."""
         try:
@@ -311,7 +242,7 @@ def open_view_sales_window(root):
             return {c.get('customer_id', ''): c.get('name', '') for c in customers}
         except Exception:
             return {}
-    
+
     customer_names = get_customer_name_mapping()
 
     def parse_docs(val):
@@ -348,6 +279,9 @@ def open_view_sales_window(root):
         total_sell = 0.0
         total_sell_usd = 0.0
         computed_usd_count = 0
+        total_vat = 0.0
+        total_net = 0.0
+        total_gross = 0.0
         returned_ids = set()
         try:
             for rr in read_returns():
@@ -401,6 +335,9 @@ def open_view_sales_window(root):
                 if not is_returned:
                     try:
                         total_sell += float(r.get('SellingPrice') or 0)
+                        total_vat += float(r.get('VAT Amount') or 0)
+                        total_net += float(r.get('Net') or 0)
+                        total_gross += float(r.get('Gross') or 0)
                     except Exception:
                         pass
                     usd_val = None
@@ -422,7 +359,7 @@ def open_view_sales_window(root):
                         except Exception:
                             pass
         suffix = f" (computed {computed_usd_count} from rates)" if computed_usd_count else ""
-        totals_var.set(f"Items: {shown}    Total Selling (TRY): {total_sell:.2f}    Total Selling (USD): {total_sell_usd:.2f}{suffix}")
+        totals_var.set(f"Items: {shown}    Net: {total_net:.2f}    KDV: {total_vat:.2f}    Gross: {total_gross:.2f}    Total Selling (TRY): {total_sell:.2f}    Total Selling (USD): {total_sell_usd:.2f}{suffix}")
         # Highlight returned rows — make them more visually noticeable
         try:
             # Apply striping first, then override returned tag so it stands out
@@ -436,11 +373,6 @@ def open_view_sales_window(root):
                 tree.tag_configure('returned', background='#fff4cc')
             except Exception:
                 pass
-
-    # Initial options and population
-    year_combo['values'] = compute_year_options(rows)
-    year_combo.set('All')
-    populate_tree(rows, 'All', '')
 
     def refresh():
         new_rows = [ _normalize_row_for_ui(r) for r in read_sales(include_deleted=show_deleted_var.get()) ]

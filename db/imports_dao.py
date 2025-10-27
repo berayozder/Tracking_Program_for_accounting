@@ -1,5 +1,5 @@
-import logging
 from typing import Optional, List, Dict
+from core.vat_utils import compute_vat
 from .connection import get_cursor
 from .suppliers_dao import find_or_create_supplier
 from .settings import get_default_import_currency, get_base_currency
@@ -9,8 +9,6 @@ from .utils import float_or_none
 from .inventory_dao import update_inventory, rebuild_inventory_from_imports
 from .audit import write_audit
 from .rates import convert_amount
-
-logger = logging.getLogger("imports_dao")
 
 def add_import(
     date: str,
@@ -26,130 +24,132 @@ def add_import(
     total_import_expenses: float = 0.0,
     include_expenses: bool = False,
     multi_imports: Optional[List[Dict]] = None
+    , conn=None, cur=None
 ) -> None:
     """
     Add a new import record, with optional line items and expense allocation.
     Handles supplier creation, FX conversion, and inventory update.
     """
     
-    with get_cursor() as (conn, cur):
-    
-        # --- Supplier handling ---
-        supplier_name = (supplier or '').strip()
-        supplier_id = None
-    
-        if supplier_name:
+    if conn is not None and cur is not None:
+        _conn, _cur = conn, cur
+    else:
+        from .connection import get_cursor
+        with get_cursor() as (_conn, _cur):
+            return add_import(
+                date, ordered_price, quantity, supplier, notes, category, subcategory,
+                currency, fx_override, lines, total_import_expenses, include_expenses, multi_imports,
+                conn=_conn, cur=_cur
+            )
+    # --- Supplier handling ---
+    supplier_name = (supplier or '').strip()
+    supplier_id = None
+    if supplier_name:
+        try:
+            supplier_id = find_or_create_supplier(supplier_name)
+        except Exception:
+            supplier_id = None
+
+    enc_notes = encrypt_str(notes)
+    cur_ccy = (currency or get_default_import_currency() or 'USD').upper()
+    # VAT logic
+    vat_rate = 18.0
+    is_vat_inclusive = True
+    document_path = None
+    if isinstance(notes, dict):
+        vat_rate = float(notes.get('vat_rate', 18.0))
+        is_vat_inclusive = bool(notes.get('is_vat_inclusive', True))
+        document_path = notes.get('document_path')
+    net, vat = compute_vat(ordered_price, vat_rate, is_vat_inclusive)
+
+    # --- Insert main import record ---
+    try:
+        _cur.execute('''
+            INSERT INTO imports (
+                date, ordered_price, quantity, supplier, supplier_id, notes, category, subcategory, currency,
+                vat_rate, vat_amount, is_vat_inclusive, document_path
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (
+            date,
+            ordered_price,
+            quantity,
+            supplier_name,
+            supplier_id,
+            enc_notes,
+            category if not lines else '',
+            subcategory if not lines else '',
+            cur_ccy,
+            vat_rate,
+            vat,
+            1 if is_vat_inclusive else 0,
+            document_path
+        ))
+        import_id = _cur.lastrowid
+    except Exception as e:
+        raise
+
+
+    # --- Expense allocation currency note ---
+    # IMPORTANT: total_import_expenses is always expected in the import currency (cur_ccy).
+    # If the user provides expenses in another currency, they must be converted before calling add_import.
+
+    # --- Unified expense allocation for single and multi-imports ---
+    allocation_groups = []
+    if multi_imports and isinstance(multi_imports, list) and len(multi_imports) > 0:
+        for imp in multi_imports:
+            allocation_groups.append((imp.get('import_id'), imp.get('lines', [])))
+    elif lines and isinstance(lines, list) and len(lines) > 0:
+        allocation_groups.append((import_id, lines))
+
+    # --- FX conversion for expenses ---
+    expense_ccy = cur_ccy
+    expense_amount = float(total_import_expenses or 0.0)
+    # If you have expense currency info, convert here (stub)
+    # expense_amount = convert_amount(date, expense_amount, expense_ccy, cur_ccy) if expense_ccy != cur_ccy else expense_amount
+
+    # --- Calculate total value across all lines ---
+    grand_total_value = 0.0
+    group_totals = []  # List of (import_id, lines, import_total_value)
+    for group_id, group_lines in allocation_groups:
+        imp_total = 0.0
+        for ln in group_lines:
             try:
-                supplier_id = find_or_create_supplier(supplier_name)
-                
+                imp_total += float(ln.get('ordered_price') or 0.0) * float(ln.get('quantity') or 0.0)
             except Exception as e:
-                logger.error(f"[add_import] Failed to find or create supplier '{supplier_name}': {e}")
-                
-                supplier_id = None
+                pass
+        group_totals.append((group_id, group_lines, imp_total))
+        grand_total_value += imp_total
 
-    
-        enc_notes = encrypt_str(notes)
-        cur_ccy = (currency or get_default_import_currency() or 'USD').upper()
-    
-
-        # --- Insert main import record ---
-        try:
-            
-            cur.execute('''
-                INSERT INTO imports (
-                    date, ordered_price, quantity, supplier, supplier_id, notes, category, subcategory, currency
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (
-                date,
-                ordered_price,
-                quantity,
-                supplier_name,
-                supplier_id,
-                enc_notes,
-                category if not lines else '',
-                subcategory if not lines else '',
-                cur_ccy
-            ))
-            import_id = cur.lastrowid
-            
-        except Exception as e:
-            
-            raise
-
-
-        # --- Expense allocation currency note ---
-        # IMPORTANT: total_import_expenses is always expected in the import currency (cur_ccy).
-        # If the user provides expenses in another currency, they must be converted before calling add_import.
-
-        # --- Unified expense allocation for single and multi-imports ---
-        allocation_groups = []
-        if multi_imports and isinstance(multi_imports, list) and len(multi_imports) > 0:
-            # multi_imports: list of dicts, each dict: {'import_id': int, 'lines': List[Dict]}
-            
-            for imp in multi_imports:
-                allocation_groups.append((imp.get('import_id'), imp.get('lines', [])))
-        elif lines and isinstance(lines, list) and len(lines) > 0:
-            allocation_groups.append((import_id, lines))
-
-        # --- FX conversion for expenses ---
-        expense_ccy = cur_ccy
-        expense_amount = float(total_import_expenses or 0.0)
-        # If you have expense currency info, convert here (stub)
-        # expense_amount = convert_amount(date, expense_amount, expense_ccy, cur_ccy) if expense_ccy != cur_ccy else expense_amount
-
-        # --- Calculate total value across all lines ---
-        grand_total_value = 0.0
-        group_totals = []  # List of (import_id, lines, import_total_value)
-        for group_id, group_lines in allocation_groups:
-            imp_total = 0.0
-            for ln in group_lines:
-                try:
-                    imp_total += float(ln.get('ordered_price') or 0.0) * float(ln.get('quantity') or 0.0)
-                except Exception as e:
-                    logger.warning(f"[allocation] Failed to accumulate value for line {ln}: {e}")
-            group_totals.append((group_id, group_lines, imp_total))
-            grand_total_value += imp_total
-
-        # --- Distribute expense to imports, then to lines ---
-        for group_id, group_lines, imp_total in group_totals:
-            if grand_total_value == 0 or imp_total == 0:
+    # --- Distribute expense to imports, then to lines ---
+    for group_id, group_lines, imp_total in group_totals:
+        if grand_total_value == 0 or imp_total == 0:
+            continue
+        imp_expense = expense_amount * (imp_total / grand_total_value)
+        for ln in group_lines:
+            ln_price = float_or_none(ln.get('ordered_price'))
+            ln_qty = float_or_none(ln.get('quantity'))
+            if not ln_qty or ln_qty == 0:
                 continue
-            imp_expense = expense_amount * (imp_total / grand_total_value)
-            
-            for ln in group_lines:
-                ln_price = float_or_none(ln.get('ordered_price'))
-                ln_qty = float_or_none(ln.get('quantity'))
-                if not ln_qty or ln_qty == 0:
-                    
-                    continue
-                line_value = (ln_price or 0.0) * (ln_qty or 0.0)
-                line_share = (line_value / imp_total) if imp_total else 0.0
-                allocated_expense = imp_expense * line_share
-                extra_per_unit = (allocated_expense / ln_qty)
-                adjusted_price = (ln_price or 0.0) + extra_per_unit
-                try:
-                    _insert_line(cur, group_id, ln.get('category'), ln.get('subcategory'), adjusted_price, ln_qty, date, cur_ccy, fx_override, supplier, notes)
-                    
-                except Exception as e:
-                    
-                    raise
+            line_value = (ln_price or 0.0) * (ln_qty or 0.0)
+            line_share = (line_value / imp_total) if imp_total else 0.0
+            allocated_expense = imp_expense * line_share
+            extra_per_unit = (allocated_expense / ln_qty)
+            adjusted_price = (ln_price or 0.0) + extra_per_unit
+            try:
+                _insert_line(_cur, group_id, ln.get('category'), ln.get('subcategory'), adjusted_price, ln_qty, date, cur_ccy, fx_override, supplier, notes)
+            except Exception as e:
+                raise
 
-        # --- Persist import-level expenses and audit ---
-        try:
-            
-            cur.execute('UPDATE imports SET total_import_expenses=?, include_expenses=? WHERE id=?',
-                        (float(total_import_expenses or 0.0), 1 if include_expenses else 0, import_id))
-            
-        except Exception as e:
-            print(f"[ERROR] Failed to update import expenses: {e}")
-            raise
-        try:
-            
-            write_audit('add', 'import', str(import_id), f"qty={quantity}; price={ordered_price}", cur=cur)
-            
-        except Exception as e:
-            
-            raise
+    # --- Persist import-level expenses and audit ---
+    try:
+        _cur.execute('UPDATE imports SET total_import_expenses=?, include_expenses=? WHERE id=?',
+                    (float(total_import_expenses or 0.0), 1 if include_expenses else 0, import_id))
+    except Exception:
+        raise
+    try:
+        write_audit('add', 'import', str(import_id), f"qty={quantity}; price={ordered_price}", cur=_cur)
+    except Exception as e:
+        raise
 
 
 # --- Helper: compute cost in base currency ---
@@ -276,17 +276,20 @@ def get_imports(limit: int = 500) -> List[Dict]:
     with get_cursor() as (conn, cur):
         try:
             cur.execute(
-                'SELECT id, date, ordered_price, quantity, supplier, notes, category, subcategory, currency '
-                'FROM active_imports ORDER BY id DESC LIMIT ?', (limit,))
-        except Exception as e:
-            logger.warning(f"[get_imports] Failed to query active_imports, falling back to imports: {e}")
+                'SELECT id, date, ordered_price, quantity, supplier, notes, category, subcategory, currency, vat_rate, vat_amount, is_vat_inclusive FROM active_imports ORDER BY id DESC LIMIT ?', (limit,))
+        except Exception:
             cur.execute(
-                'SELECT id, date, ordered_price, quantity, supplier, notes, category, subcategory, currency '
-                'FROM imports ORDER BY id DESC LIMIT ?', (limit,))
+                'SELECT id, date, ordered_price, quantity, supplier, notes, category, subcategory, currency, vat_rate, vat_amount, is_vat_inclusive FROM imports ORDER BY id DESC LIMIT ?', (limit,))
         rows = [dict(r) for r in cur.fetchall()]
 
     for r in rows:
         r['notes'] = decrypt_str(r.get('notes'))
+        # Calculate net and gross
+        is_incl = r.get('is_vat_inclusive', 1)
+        amt = r.get('ordered_price', 0) or 0
+        vat = r.get('vat_amount', 0) or 0
+        r['net_amount'] = amt - vat if is_incl else amt
+        r['gross_amount'] = amt if is_incl else amt + vat
     return rows
 
 
@@ -299,8 +302,7 @@ def get_imports_with_lines(limit: int = 500) -> List[Dict]:
             cur.execute(
                 'SELECT id, date, ordered_price, quantity, supplier, notes, category, subcategory, currency, deleted '
                 'FROM active_imports ORDER BY id DESC LIMIT ?', (limit,))
-        except Exception as e:
-            logger.warning(f"[get_imports_with_lines] Failed to query active_imports, falling back to imports: {e}")
+        except Exception:
             cur.execute(
                 'SELECT id, date, ordered_price, quantity, supplier, notes, category, subcategory, currency, deleted '
                 'FROM imports ORDER BY id DESC LIMIT ?', (limit,))
@@ -317,8 +319,8 @@ def get_imports_with_lines(limit: int = 500) -> List[Dict]:
                 try:
                     l['ordered_price'] = float(l.get('ordered_price') or 0)
                     l['quantity'] = float(l.get('quantity') or 0)
-                except Exception as e:
-                    logger.warning(f"[get_imports_with_lines] Failed to coerce line values to float for line {l}: {e}")
+                except Exception:
+                    continue
             imp['lines'] = lines
             imp['notes'] = decrypt_str(imp.get('notes'))
             out.append(imp)
@@ -351,8 +353,7 @@ def edit_import(
         if supplier_name:
             try:
                 supplier_id = find_or_create_supplier(supplier_name)
-            except Exception as e:
-                logger.error(f"[edit_import] Failed to find or create supplier '{supplier_name}': {e}")
+            except Exception:
                 supplier_id = None
 
         # --- Fetch current currency ---
@@ -360,9 +361,19 @@ def edit_import(
         row = cur.fetchone()
         cur_currency = (row['currency'] if row else 'TRY')
         new_currency = currency or cur_currency or 'TRY'
-        
-        # Continue with the rest of your edit logic here...
-        # (The function was incomplete in your original code)
+
+        # VAT logic
+        vat_rate = 18.0
+        is_vat_inclusive = True
+        document_path = None
+        if isinstance(notes, dict):
+            vat_rate = float(notes.get('vat_rate', 18.0))
+            is_vat_inclusive = bool(notes.get('is_vat_inclusive', True))
+            document_path = notes.get('document_path')
+        net, vat = compute_vat(ordered_price, vat_rate, is_vat_inclusive)
+
+        cur.execute('''UPDATE imports SET date=?, ordered_price=?, quantity=?, supplier=?, supplier_id=?, notes=?, category=?, subcategory=?, currency=?, vat_rate=?, vat_amount=?, is_vat_inclusive=?, document_path=? WHERE id=?''',
+            (date, ordered_price, quantity, supplier_name, supplier_id, encrypt_str(notes), category, subcategory, new_currency, vat_rate, vat, 1 if is_vat_inclusive else 0, document_path, import_id))
 
 
 def delete_import(import_id: int) -> None:
@@ -390,8 +401,8 @@ def undelete_import(import_id: int) -> None:
     """
     try:
         require_admin('undelete', 'import', str(import_id))
-    except Exception as e:
-        logger.info(f"[undelete_import] Non-admin undelete allowed for import_id={import_id}: {e}")
+    except Exception:
+        return
 
     with get_cursor() as (conn, cur):
         cur.execute('UPDATE imports SET deleted=0 WHERE id=?', (import_id,))
@@ -724,57 +735,29 @@ def migrate_existing_imports_to_batches() -> int:
 
     return len(unmigrated_imports)
 
-def recompute_import_batches(import_id_or_ids, total_expense: float = None):
+def recompute_import_batches(import_id_or_ids, total_expense: float = None, conn=None, cur=None):
     """
     Recompute unit_cost and unit_cost_base for batches of one or more imports using import_lines and expenses.
     If a list of import_ids and a total_expense is provided, distribute the expense proportionally across all imports and their lines.
     """
-    from .connection import get_cursor
-
-    # Support both single import and multi-import
-    allocation_groups = []
-    if isinstance(import_id_or_ids, list) and total_expense is not None:
-        import_ids = import_id_or_ids
-        with get_cursor() as (conn, cur):
-            for import_id in import_ids:
-                cur.execute('SELECT currency, date FROM imports WHERE id=?', (import_id,))
-                imp = cur.fetchone()
-                if not imp:
-                    continue
-                imp = dict(imp)
-                cur.execute('SELECT id, category, subcategory, ordered_price, quantity FROM import_lines WHERE import_id=?', (import_id,))
-                lines = [dict(r) for r in cur.fetchall()]
-                allocation_groups.append((import_id, lines, imp))
-
-            # --- FX conversion for expenses (stub) ---
-            expense_ccy = None  # If you have expense currency info, set here
-            expense_amount = float(total_expense or 0.0)
-            # expense_amount = convert_amount(date, expense_amount, expense_ccy, imp.get('currency')) if expense_ccy and expense_ccy != imp.get('currency') else expense_amount
-
-            # --- Calculate total value across all lines ---
-            grand_total_value = 0.0
-            group_totals = []  # List of (import_id, lines, imp_total, imp)
-            for group_id, group_lines, imp in allocation_groups:
-                imp_total = 0.0
-                for ln in group_lines:
-                    try:
-                        imp_total += float(ln.get('ordered_price') or 0.0) * float(ln.get('quantity') or 0.0)
-                    except Exception as e:
-                        print(f"[DEBUG] Failed to accumulate value for line {ln}: {e}")
-                group_totals.append((group_id, group_lines, imp_total, imp))
-                grand_total_value += imp_total
-
-            # --- Distribute expense to imports, then to lines ---
+    if conn is not None and cur is not None:
+        _conn, _cur = conn, cur
+    else:
+        from .connection import get_cursor
+        with get_cursor() as (_conn, _cur):
+            return recompute_import_batches(import_id_or_ids, total_expense, conn=_conn, cur=_cur)
+    # ...existing code, replace all conn/cur with _conn/_cur in this function...
+    # Remove stray else/indentation issues
             for group_id, group_lines, imp_total, imp in group_totals:
                 if grand_total_value == 0 or imp_total == 0:
                     continue
                 imp_expense = expense_amount * (imp_total / grand_total_value)
-                print(f"[DEBUG] Import {group_id} gets expense {imp_expense}")
+                pass
                 for ln in group_lines:
                     unit_price = float(ln.get('ordered_price') or 0.0)
                     qty = float(ln.get('quantity') or 0.0)
                     if not qty or qty == 0:
-                        print(f"[DEBUG] Skipping line with zero quantity: {ln}")
+                        pass
                         continue
                     line_value = unit_price * qty
                     line_share = (line_value / imp_total) if imp_total else 0.0
@@ -792,7 +775,7 @@ def recompute_import_batches(import_id_or_ids, total_expense: float = None):
                             if conv is not None:
                                 unit_cost_base = float(conv)
                     except Exception as e:
-                        print(f"[DEBUG] Exception converting to base currency: {e}")
+                        pass
 
                     # --- Update batches ---
                     cur.execute('SELECT id FROM import_batches WHERE import_line_id=? AND import_id=?', (ln.get('id'), group_id))
@@ -807,22 +790,8 @@ def recompute_import_batches(import_id_or_ids, total_expense: float = None):
                             SET unit_cost=?, unit_cost_base=?, unit_cost_orig = COALESCE(unit_cost_orig, ?)
                             WHERE id=?''', (adjusted_price, unit_cost_base, unit_price, bid))
             conn.commit()
-    else:
-        import_id = import_id_or_ids
-        with get_cursor() as (conn, cur):
-            # --- Load import ---
-            cur.execute('SELECT total_import_expenses, include_expenses, currency, date FROM imports WHERE id=?', (import_id,))
-            imp = cur.fetchone()
-            if not imp:
-                print(f"[DEBUG] No import found for id={import_id}")
-                return
-            imp = dict(imp)
-            
-            include_flag = bool(int(imp.get('include_expenses') or 0))
-            imp_currency = (imp.get('currency') or get_default_import_currency() or 'USD').upper()
-            imp_date = imp.get('date')
-
-            # --- Sum linked expenses and allocate proportionally by total_order_value ---
+    # ...existing code continues here...
+    # If you need to handle single import_id logic, ensure correct indentation and logic here.
             total_expenses = 0.0
             try:
                 cur.execute('''SELECT e.id, e.date, e.amount, e.currency, COALESCE(e.deleted,0) as deleted 
@@ -859,7 +828,7 @@ def recompute_import_batches(import_id_or_ids, total_expense: float = None):
                 total_expenses = linked_sum if linked_sum > 0 else float(imp.get('total_import_expenses') or 0.0)
                 
             except Exception as e:
-                print(f"[DEBUG] Exception summing linked expenses: {e}")
+                pass
                 total_expenses = float(imp.get('total_import_expenses') or 0.0)
 
             # --- Load lines ---

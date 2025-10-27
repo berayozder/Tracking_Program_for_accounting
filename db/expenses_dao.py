@@ -7,21 +7,20 @@ from .auth import require_admin
 from .imports_dao import recompute_import_batches
 
 
+
 from typing import Optional
+from core.vat_utils import compute_vat
 
 
-def add_expense(date, amount, is_import_related=False, import_id=None, category=None, notes=None, document_path=None, import_ids=None, currency: Optional[str] = None):
-
-    print(f"[DEBUG] add_expense called with: date={date}, amount={amount}, is_import_related={is_import_related}, import_id={import_id}, category={category}, notes={notes}, document_path={document_path}, import_ids={import_ids}, currency={currency}")
+def add_expense(date, amount, is_import_related=False, import_id=None, category=None, notes=None, document_path=None, import_ids=None, currency: Optional[str] = None, conn=None, cur=None):
     ids = []
     if import_ids:
         for v in import_ids:
             try:
                 ids.append(int(v))
-            except Exception as e:
-                print(f"[DEBUG] Failed to convert import_id '{v}' to int: {e}")
+            except Exception:
+                pass
         ids = list(dict.fromkeys(ids))
-    print(f"[DEBUG] ids after processing import_ids: {ids}")
     first_id = None
     if ids:
         first_id = ids[0]
@@ -29,33 +28,38 @@ def add_expense(date, amount, is_import_related=False, import_id=None, category=
         try:
             first_id = int(import_id)
             ids = [first_id]
-        except Exception as e:
-            print(f"[DEBUG] Failed to convert import_id '{import_id}' to int: {e}")
+        except Exception:
             first_id = None
 
-    print(f"[DEBUG] first_id: {first_id}")
     enc_notes = encrypt_str(notes or '')
-    print(f"[DEBUG] enc_notes: {enc_notes}")
     exp_ccy = ((currency or get_default_expense_currency() or get_base_currency() or '')).upper()
-    print(f"[DEBUG] exp_ccy: {exp_ccy}")
+    # VAT logic
+    vat_rate = 18.0
+    is_vat_inclusive = True
+    if isinstance(notes, dict):
+        vat_rate = float(notes.get('vat_rate', 18.0))
+        is_vat_inclusive = bool(notes.get('is_vat_inclusive', True))
+    net, vat = compute_vat(amount, vat_rate, is_vat_inclusive)
+    if conn is not None and cur is not None:
+        _conn, _cur = conn, cur
+    else:
+        from .connection import get_cursor
+        with get_cursor() as (_conn, _cur):
+            return add_expense(date, amount, is_import_related, import_id, category, notes, document_path, import_ids, currency, conn=_conn, cur=_cur)
     try:
-        with get_cursor() as (conn, cur):
-            print(f"[DEBUG] Got DB cursor: conn={conn}, cur={cur}")
-            cur.execute('''INSERT INTO expenses (date, amount, is_import_related, import_id, category, notes, document_path, currency)
-                        VALUES (?,?,?,?,?,?,?,?)''', (date, amount, 1 if is_import_related else 0, first_id, category, enc_notes, document_path, exp_ccy))
-            expense_id = cur.lastrowid
-            print(f"[DEBUG] Inserted expense with id: {expense_id}")
-            try:
-                for iid in ids:
-                    cur.execute('INSERT OR IGNORE INTO expense_import_links (expense_id, import_id) VALUES (?,?)', (expense_id, iid))
-                    print(f"[DEBUG] Linked expense {expense_id} to import {iid}")
-            except Exception as e:
-                print(f"[DEBUG] Failed to link expense to import: {e}")
-            try:
-                write_audit('add', 'expense', str(expense_id), f"amount={amount}", cur=cur)
-                print(f"[DEBUG] Wrote audit log for expense id: {expense_id}")
-            except Exception as e:
-                print(f"[DEBUG] Failed to write audit log: {e}")
+        _cur.execute('''INSERT INTO expenses (date, amount, is_import_related, import_id, category, notes, document_path, currency, vat_rate, vat_amount, is_vat_inclusive)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?)''', (date, amount, 1 if is_import_related else 0, first_id, category, enc_notes, document_path, exp_ccy, vat_rate, vat, 1 if is_vat_inclusive else 0))
+        expense_id = _cur.lastrowid
+        try:
+            for iid in ids:
+                _cur.execute('INSERT OR IGNORE INTO expense_import_links (expense_id, import_id) VALUES (?,?)', (expense_id, iid))
+        except Exception:
+            pass
+        try:
+            write_audit('add', 'expense', str(expense_id), f"amount={amount}", cur=_cur)
+            print(f"[DEBUG] Wrote audit log for expense id: {expense_id}")
+        except Exception as e:
+            print(f"[DEBUG] Failed to write audit log: {e}")
     except Exception as e:
         print(f"[DEBUG] Exception during DB insert: {e}")
 
@@ -77,13 +81,19 @@ def add_expense(date, amount, is_import_related=False, import_id=None, category=
 def get_expenses(limit=500):
     with get_cursor() as (conn, cur):
         try:
-            cur.execute('SELECT id, date, amount, is_import_related, import_id, category, notes, document_path, currency FROM active_expenses ORDER BY id DESC LIMIT ?', (limit,))
+            cur.execute('SELECT id, date, amount, is_import_related, import_id, category, notes, document_path, currency, vat_rate, vat_amount, is_vat_inclusive FROM active_expenses ORDER BY id DESC LIMIT ?', (limit,))
         except Exception:
-            cur.execute('SELECT id, date, amount, is_import_related, import_id, category, notes, document_path, currency FROM expenses ORDER BY id DESC LIMIT ?', (limit,))
+            cur.execute('SELECT id, date, amount, is_import_related, import_id, category, notes, document_path, currency, vat_rate, vat_amount, is_vat_inclusive FROM expenses ORDER BY id DESC LIMIT ?', (limit,))
         rows = [dict(r) for r in cur.fetchall()]
 
     for r in rows:
         r['notes'] = decrypt_str(r.get('notes'))
+        # Calculate net and gross
+        is_incl = r.get('is_vat_inclusive', 1)
+        amt = r.get('amount', 0) or 0
+        vat = r.get('vat_amount', 0) or 0
+        r['net_amount'] = amt - vat if is_incl else amt
+        r['gross_amount'] = amt if is_incl else amt + vat
     return rows
 
 
@@ -110,9 +120,16 @@ def edit_expense(expense_id, date, amount, is_import_related=False, import_id=No
 
     enc_notes = encrypt_str(notes or '')
     exp_ccy = ((currency or get_default_expense_currency() or get_base_currency() or '')).upper()
+    # VAT logic
+    vat_rate = 18.0
+    is_vat_inclusive = True
+    if isinstance(notes, dict):
+        vat_rate = float(notes.get('vat_rate', 18.0))
+        is_vat_inclusive = bool(notes.get('is_vat_inclusive', True))
+    net, vat = compute_vat(amount, vat_rate, is_vat_inclusive)
     with get_cursor() as (conn, cur):
-        cur.execute('''UPDATE expenses SET date=?, amount=?, is_import_related=?, import_id=?, category=?, notes=?, document_path=?, currency=? WHERE id=?''',
-                    (date, amount, 1 if is_import_related else 0, first_id, category, enc_notes, document_path, exp_ccy, expense_id))
+        cur.execute('''UPDATE expenses SET date=?, amount=?, is_import_related=?, import_id=?, category=?, notes=?, document_path=?, currency=?, vat_rate=?, vat_amount=?, is_vat_inclusive=? WHERE id=?''',
+                    (date, amount, 1 if is_import_related else 0, first_id, category, enc_notes, document_path, exp_ccy, vat_rate, vat, 1 if is_vat_inclusive else 0, expense_id))
         try:
             cur.execute('DELETE FROM expense_import_links WHERE expense_id=?', (expense_id,))
             for iid in ids:
