@@ -11,6 +11,28 @@ import subprocess
 
 
 def open_view_expenses_window(root):
+    import csv
+    def do_export_csv():
+        file_path = filedialog.asksaveasfilename(
+            defaultextension='.csv',
+            filetypes=[('CSV files', '*.csv'), ('All files', '*.*')],
+            title='Export Expenses to CSV'
+        )
+        if not file_path:
+            return
+        columns = [tree.heading(col)['text'] for col in tree['columns']]
+        data = []
+        for iid in tree.get_children():
+            values = tree.item(iid)['values']
+            data.append(values)
+        try:
+            with open(file_path, 'w', newline='', encoding='utf-8') as f:
+                writer = csv.writer(f)
+                writer.writerow(columns)
+                writer.writerows(data)
+            messagebox.showinfo('Exported', f'Expenses exported to {file_path}')
+        except Exception as e:
+            messagebox.showerror('Error', f'Failed to export CSV: {e}')
     window = tk.Toplevel(root)
     window.title('💳 View Expenses')
     window.geometry('1000x450')
@@ -802,6 +824,7 @@ def open_view_expenses_window(root):
     secondary_frame = ttk.Frame(btn_frame)
     secondary_frame.pack(side='right')
     themed_button(secondary_frame, text='📂 Documents', variant='secondary', command=do_manage_docs).pack(side=tk.LEFT, padx=4)
+    themed_button(secondary_frame, text='⬇️ Export CSV', variant='secondary', command=do_export_csv).pack(side=tk.LEFT, padx=4)
     themed_button(secondary_frame, text='🗑️ Delete', variant='danger', command=do_delete).pack(side=tk.LEFT, padx=(8, 0))
     themed_button(secondary_frame, text='♻️ Undelete', variant='primary', command=do_undelete).pack(side=tk.LEFT, padx=4)
     

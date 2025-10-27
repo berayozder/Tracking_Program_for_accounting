@@ -4,6 +4,28 @@ import db as db
 from .theme import stripe_treeview, maximize_window, themed_button
 
 def open_customers_window(root):
+    import csv
+    def do_export_csv():
+        file_path = tk.filedialog.asksaveasfilename(
+            defaultextension='.csv',
+            filetypes=[('CSV files', '*.csv'), ('All files', '*.*')],
+            title='Export Customers to CSV'
+        )
+        if not file_path:
+            return
+        columns = [tree.heading(col)['text'] for col in tree['columns']]
+        data = []
+        for iid in tree.get_children():
+            values = tree.item(iid)['values']
+            data.append(values)
+        try:
+            with open(file_path, 'w', newline='', encoding='utf-8') as f:
+                writer = csv.writer(f)
+                writer.writerow(columns)
+                writer.writerows(data)
+            tk.messagebox.showinfo('Exported', f'Customers exported to {file_path}')
+        except Exception as e:
+            tk.messagebox.showerror('Error', f'Failed to export CSV: {e}')
     """
     Customer Management Window
     Shows all customers with their details and allows editing contact information
@@ -386,6 +408,7 @@ def open_customers_window(root):
     secondary_frame = ttk.Frame(button_frame)
     secondary_frame.pack(side='right')
     
+    themed_button(secondary_frame, text='⬇️ Export CSV', variant='secondary', command=do_export_csv).pack(side='left', padx=4)
     themed_button(secondary_frame, text='🗑️ Delete Customer', variant='danger',
                command=do_delete_customer).pack(side='left', padx=4)
     themed_button(secondary_frame, text='Close', variant='secondary',

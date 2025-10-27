@@ -9,12 +9,35 @@ from .theme import stripe_treeview, maximize_window, apply_theme, themed_button
 
 import db as db
 from db.returns_dao import list_returns as db_list_returns, update_return as db_update_return, delete_return as db_delete_return, undelete_return as db_undelete_return
+from db.returns_dao import process_restock_change as db_process_restock_change
 
 # Columns from DB (read-only ones are disabled in edit).
 DB_COLS = ['id', 'return_date', 'product_id', 'sale_date', 'category', 'subcategory', 'unit_price', 'selling_price', 'platform', 'refund_amount', 'refund_currency', 'refund_amount_base', 'restock', 'reason', 'doc_paths']
 
 
 def open_view_returns_window(root):
+    import csv
+    def do_export_csv():
+        file_path = filedialog.asksaveasfilename(
+            defaultextension='.csv',
+            filetypes=[('CSV files', '*.csv'), ('All files', '*.*')],
+            title='Export Returns to CSV'
+        )
+        if not file_path:
+            return
+        columns = [tree.heading(col)['text'] for col in tree['columns']]
+        data = []
+        for iid in tree.get_children():
+            values = tree.item(iid)['values']
+            data.append(values)
+        try:
+            with open(file_path, 'w', newline='', encoding='utf-8') as f:
+                writer = csv.writer(f)
+                writer.writerow(columns)
+                writer.writerows(data)
+            messagebox.showinfo('Exported', f'Returns exported to {file_path}')
+        except Exception as e:
+            messagebox.showerror('Error', f'Failed to export CSV: {e}')
     rows = db_list_returns()
     if not rows:
         messagebox.showinfo('No data', 'No returns found.')
@@ -155,9 +178,13 @@ def open_view_returns_window(root):
         count = 0
         total_refund = 0.0
         last_rows.clear()
-        for row in _fetch_returns(show_deleted_var.get()):
+        show_deleted = show_deleted_var.get()
+        for row in _fetch_returns(show_deleted):
             # Convert sqlite Row to dict if needed
             rowd = dict(row) if not isinstance(row, dict) else row
+            # Hide deleted returns unless show_deleted is True
+            if not show_deleted and int(rowd.get('deleted', 0)) == 1:
+                continue
             if row_matches(rowd, search_var.get().strip()):
                 vals = [rowd.get(c, '') for c in cols]
                 try:
@@ -291,11 +318,27 @@ def open_view_returns_window(root):
         dlg.title('Edit Return')
         dlg.geometry('480x520')
 
+        # --- Scrollable Frame Setup ---
+        canvas = tk.Canvas(dlg, borderwidth=0, background="#f8f8f8", height=480)
+        vscroll = ttk.Scrollbar(dlg, orient="vertical", command=canvas.yview)
+        scroll_frame = ttk.Frame(canvas)
+        scroll_frame_id = canvas.create_window((0, 0), window=scroll_frame, anchor="nw")
+        canvas.configure(yscrollcommand=vscroll.set)
+        canvas.pack(side="left", fill="both", expand=True)
+        vscroll.pack(side="right", fill="y")
+
+        def _on_frame_configure(event):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+        scroll_frame.bind("<Configure>", _on_frame_configure)
+        def _on_mousewheel(event):
+            canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+        canvas.bind_all("<MouseWheel>", _on_mousewheel)
+
         entries = {}
 
         def add_field(label, key, disabled=False):
-            ttk.Label(dlg, text=label).pack(pady=4)
-            e = ttk.Entry(dlg, width=40)
+            ttk.Label(scroll_frame, text=label).pack(pady=4)
+            e = ttk.Entry(scroll_frame, width=40)
             e.insert(0, str(rec.get(key, '')))
             if disabled:
                 e.configure(state='disabled')
@@ -314,7 +357,7 @@ def open_view_returns_window(root):
         add_field('Refund Currency (e.g., TRY, USD):', 'refund_currency')
         add_field('Restock (1/0):', 'restock')
         # Reason with suggestions
-        ttk.Label(dlg, text='Reason:').pack(pady=4)
+        ttk.Label(scroll_frame, text='Reason:').pack(pady=4)
         # Suggestions from DB plus defaults
         try:
             import db as db
@@ -338,8 +381,8 @@ def open_view_returns_window(root):
             filtered = [s for s in suggestions if typed in s.lower()] if typed else suggestions
             reason_combo['values'] = filtered
 
-        reason_combo = ttk.Combobox(dlg, textvariable=reason_var, values=suggestions, width=38)
-        reason_combo.pack(pady=2, side=tk.LEFT)
+        reason_combo = ttk.Combobox(scroll_frame, textvariable=reason_var, values=suggestions, width=38)
+        reason_combo.pack(pady=2, fill='x')
         reason_combo.configure(state='normal')
         reason_combo.bind('<KeyRelease>', filter_suggestions)
 
@@ -356,12 +399,12 @@ def open_view_returns_window(root):
                 except Exception:
                     tk.messagebox.showerror('Error', 'Could not add reason to presets.')
 
-        add_btn = ttk.Button(dlg, text='+ Add to defaults', command=add_reason_to_defaults)
-        add_btn.pack(pady=2, side=tk.LEFT, padx=6)
+        add_btn = ttk.Button(scroll_frame, text='+ Add to defaults', command=add_reason_to_defaults)
+        add_btn.pack(pady=2)
 
         # DocumentPath with Browse button
-        ttk.Label(dlg, text='Return Document (path):').pack(pady=4)
-        doc_frame = ttk.Frame(dlg)
+        ttk.Label(scroll_frame, text='Return Document (path):').pack(pady=4)
+        doc_frame = ttk.Frame(scroll_frame)
         doc_entry = ttk.Entry(doc_frame, width=32)
         doc_entry.insert(0, str(rec.get('doc_paths', '')))
         doc_entry.pack(side=tk.LEFT, padx=(0, 6))
@@ -397,21 +440,28 @@ def open_view_returns_window(root):
                 return
             restock_val = entries['restock'].get().strip()
             restock = 1 if restock_val in ('1', 'true', 'True', 'YES', 'yes') else 0
-            update_ok = db_update_return(rid, {
-                'ReturnDate': d,
-                'RefundAmount': refund,
-                'RefundCurrency': entries['refund_currency'].get().strip().upper() or '',
-                'Restock': restock,
-                'Reason': reason_var.get().strip(),
+            prev_restock = int(rec.get('restock', 0))
+            update_data = dict(rec)
+            update_data.update({
+                'return_date': d,
+                'refund_amount': refund,
+                'refund_currency': entries['refund_currency'].get().strip().upper() or '',
+                'restock': restock,
+                'reason': reason_var.get().strip(),
                 'doc_paths': doc_entry.get().strip(),
             })
+            update_ok = True
+            if restock != prev_restock:
+                update_ok = db_process_restock_change(rid, restock)
+            else:
+                update_ok = db_update_return(rid, update_data)
             if not update_ok:
                 messagebox.showerror('Error', 'Failed to update return', parent=dlg)
                 return
             dlg.destroy()
             refresh()
 
-        themed_button(dlg, text='Save', variant='primary', command=save_edit).pack(pady=10)
+        themed_button(scroll_frame, text='Save', variant='primary', command=save_edit).pack(pady=10)
 
     def on_search_change(event=None):
         populate()
@@ -562,6 +612,7 @@ def open_view_returns_window(root):
         except Exception:
             pass
     themed_button(btn_frame, text='Deselect All', variant='primary', command=deselect_all).pack(side=tk.LEFT, padx=6)
+    themed_button(btn_frame, text='⬇️ Export CSV', variant='secondary', command=do_export_csv).pack(side=tk.LEFT, padx=6)
     themed_button(btn_frame, text='Edit', variant='success', command=do_edit).pack(side=tk.LEFT, padx=6)
     themed_button(btn_frame, text='Delete', variant='danger', command=do_delete).pack(side=tk.LEFT, padx=6)
     themed_button(btn_frame, text='📂 Documents', variant='secondary', command=do_manage_docs).pack(side=tk.LEFT, padx=6)

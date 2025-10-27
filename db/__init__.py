@@ -286,13 +286,15 @@ try:
         read_customers,
         write_customers,
         find_customer_by_name,
-        find_or_create_customer,
-        get_customer_name_suggestions,
+    # find_or_create_customer,  # Removed: not implemented
+    # get_customer_name_suggestions,  # Removed: not implemented
         edit_customer,
         delete_customer,
         get_customer_sales_summary,
     )  # type: ignore
-except Exception:
+except Exception as e:
+    print("[db/__init__.py] Error importing customers_dao:", e)
+    import traceback; traceback.print_exc()
     get_next_customer_id = None  # type: ignore
     add_customer = None  # type: ignore
     read_customers = None  # type: ignore
@@ -310,8 +312,8 @@ else:
         "read_customers",
         "write_customers",
         "find_customer_by_name",
-        "find_or_create_customer",
-        "get_customer_name_suggestions",
+    # "find_or_create_customer",  # Removed: not implemented
+    # "get_customer_name_suggestions",  # Removed: not implemented
         "edit_customer",
         "delete_customer",
         "get_customer_sales_summary",

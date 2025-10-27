@@ -1,14 +1,12 @@
 from typing import Optional
-from .connection import get_conn
+from .connection import get_conn, get_cursor
 
 # ---------------- Settings helpers ----------------
 def get_setting(key: str, default: Optional[str] = None) -> Optional[str]:
     try:
-        conn = get_conn()
-        cur = conn.cursor()
-        cur.execute('SELECT value FROM settings WHERE key=?', (key,))
-        row = cur.fetchone()
-        conn.close()
+        with get_cursor() as (conn, cur):
+            cur.execute('SELECT value FROM settings WHERE key=?', (key,))
+            row = cur.fetchone()
         return row['value'] if row else default
     except Exception:
         return default
@@ -20,11 +18,9 @@ def set_setting(key: str, value: Optional[str]) -> None:
     Uses INSERT OR REPLACE so callers can set or update values safely.
     """
     try:
-        conn = get_conn()
-        cur = conn.cursor()
-        cur.execute('INSERT OR REPLACE INTO settings(key, value) VALUES (?, ?)', (key, None if value is None else str(value)))
-        conn.commit()
-        conn.close()
+        with get_cursor() as (conn, cur):
+            cur.execute('INSERT OR REPLACE INTO settings(key, value) VALUES (?, ?)', (key, None if value is None else str(value)))
+            conn.commit()
     except Exception:
         # Silent failure is acceptable for non-critical settings
         pass

@@ -81,6 +81,31 @@ def _normalize_row_for_ui(row):
 
 
 def open_view_sales_window(root):
+    import csv
+    def do_export_csv():
+        # Get displayed rows from the treeview
+        file_path = filedialog.asksaveasfilename(
+            defaultextension='.csv',
+            filetypes=[('CSV files', '*.csv'), ('All files', '*.*')],
+            title='Export Sales to CSV'
+        )
+        if not file_path:
+            return
+        # Get columns
+        columns = [tree.heading(col)['text'] for col in tree['columns']]
+        # Get all rows
+        data = []
+        for iid in tree.get_children():
+            values = tree.item(iid)['values']
+            data.append(values)
+        try:
+            with open(file_path, 'w', newline='', encoding='utf-8') as f:
+                writer = csv.writer(f)
+                writer.writerow(columns)
+                writer.writerows(data)
+            messagebox.showinfo('Exported', f'Sales exported to {file_path}')
+        except Exception as e:
+            messagebox.showerror('Error', f'Failed to export CSV: {e}')
     rows = [ _normalize_row_for_ui(r) for r in read_sales() ]
     if not rows:
         messagebox.showinfo('No data', 'No sales found.')
@@ -1155,6 +1180,8 @@ def open_view_sales_window(root):
               command=do_view_batch_info).pack(side=tk.LEFT, padx=4)
     themed_button(secondary_frame, text='📄 Documents', variant='secondary',
               command=do_manage_docs).pack(side=tk.LEFT, padx=4)
+    themed_button(secondary_frame, text='⬇️ Export CSV', variant='secondary',
+              command=do_export_csv).pack(side=tk.LEFT, padx=4)
     themed_button(secondary_frame, text='↩️ Mark Returned', variant='secondary',
               command=do_mark_returned).pack(side=tk.LEFT, padx=(8, 4))
     themed_button(secondary_frame, text='🗑️ Delete', variant='danger',

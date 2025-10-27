@@ -88,9 +88,8 @@ def get_audit_logs(
     params.append(limit)
 
     try:
-        with get_conn() as conn:
+        with get_cursor() as (conn, cur):
             conn.row_factory = lambda cursor, row: {col[0]: row[idx] for idx, col in enumerate(cursor.description)}
-            cur = conn.cursor()
             cur.execute(sql, params)
             rows = cur.fetchall()
         return rows
@@ -117,8 +116,7 @@ def get_audit_distinct(field: str) -> List[str]:
     sql = f"SELECT DISTINCT {field} FROM audit_log WHERE {field} IS NOT NULL AND {field} <> '' ORDER BY {field}"
 
     try:
-        with get_conn() as conn:
-            cur = conn.cursor()
+        with get_cursor() as (conn, cur):
             cur.execute(sql)
             vals = [r[0] for r in cur.fetchall()]
         return vals

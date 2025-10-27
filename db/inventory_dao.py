@@ -20,16 +20,11 @@ def update_inventory(category, subcategory, quantity, cur=None):
     except Exception:
         q = 0.0
 
-    with ExitStack() as stack:
-        if cur is not None:
-            cursor = cur
-        else:
-            conn, cursor = stack.enter_context(get_cursor())
-
+    if cur is not None:
+        cursor = cur
         cursor.execute('SELECT id, quantity FROM inventory WHERE category=? AND subcategory=?',
                        (category or '', subcategory or ''))
         row = cursor.fetchone()
-
         if row:
             new_q = (row['quantity'] or 0) + q
             cursor.execute('UPDATE inventory SET quantity=?, last_updated=? WHERE id=?',
@@ -39,6 +34,21 @@ def update_inventory(category, subcategory, quantity, cur=None):
                 'INSERT INTO inventory (category, subcategory, quantity, last_updated) VALUES (?,?,?,?)',
                 (category or '', subcategory or '', q, now)
             )
+    else:
+        with get_cursor() as (conn, cursor):
+            cursor.execute('SELECT id, quantity FROM inventory WHERE category=? AND subcategory=?',
+                           (category or '', subcategory or ''))
+            row = cursor.fetchone()
+            if row:
+                new_q = (row['quantity'] or 0) + q
+                cursor.execute('UPDATE inventory SET quantity=?, last_updated=? WHERE id=?',
+                               (new_q, now, row['id']))
+            else:
+                cursor.execute(
+                    'INSERT INTO inventory (category, subcategory, quantity, last_updated) VALUES (?,?,?,?)',
+                    (category or '', subcategory or '', q, now)
+                )
+            conn.commit()
 
 
 def rebuild_inventory_from_imports(cur=None):
@@ -47,12 +57,25 @@ def rebuild_inventory_from_imports(cur=None):
     Can optionally accept a cursor to avoid creating a new connection.
     """
     now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-
     if cur:
         cursor = cur
-        close_cursor = False
+        cursor.execute('DELETE FROM inventory')
+        cursor.execute('''
+            INSERT INTO inventory (category, subcategory, quantity, last_updated)
+            SELECT category, subcategory, SUM(quantity), ?
+            FROM imports
+            GROUP BY category, subcategory
+        ''', (now,))
     else:
-        cursor = get_cursor().__enter__()
+        with get_cursor() as (conn, cursor):
+            cursor.execute('DELETE FROM inventory')
+            cursor.execute('''
+                INSERT INTO inventory (category, subcategory, quantity, last_updated)
+                SELECT category, subcategory, SUM(quantity), ?
+                FROM imports
+                GROUP BY category, subcategory
+            ''', (now,))
+            conn.commit()
         close_cursor = True
 
     try:

@@ -1,4 +1,4 @@
-from .connection import get_conn
+from .connection import get_conn, get_cursor
 from datetime import datetime
 
 # ---------------- CUSTOMER MANAGEMENT ----------------
@@ -16,10 +16,9 @@ def _row_to_dict(row, cols):
 
 def get_next_customer_id():
     try:
-        conn = get_conn()
-        cur = conn.cursor()
-        cur.execute("SELECT customer_id FROM customers ORDER BY id DESC LIMIT 1")
-        row = cur.fetchone()
+        with get_cursor() as (conn, cur):
+            cur.execute("SELECT customer_id FROM customers ORDER BY id DESC LIMIT 1")
+            row = cur.fetchone()
         # normalize result retrieval
         if not row:
             return "CUST001"
@@ -34,83 +33,53 @@ def get_next_customer_id():
             return "CUST001"
     except Exception:
         return "CUST001"
-    finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
 
 
 def add_customer(name, email='', phone='', address='', notes=''):
     try:
-        conn = get_conn()
-        cur = conn.cursor()
-        cid = get_next_customer_id()
-        created_date = datetime.now().strftime('%Y-%m-%d')
-        cur.execute('''
-            INSERT INTO customers(customer_id, name, email, phone, address, notes, created_date)
-            VALUES (?,?,?,?,?,?,?)
-        ''', (cid, name.strip(), email.strip(), phone.strip(), address.strip(), notes.strip(), created_date))
-        conn.commit()
-        return cid
+        with get_cursor() as (conn, cur):
+            cid = get_next_customer_id()
+            created_date = datetime.now().strftime('%Y-%m-%d')
+            cur.execute('''
+                INSERT INTO customers(customer_id, name, email, phone, address, notes, created_date)
+                VALUES (?,?,?,?,?,?,?)
+            ''', (cid, name.strip(), email.strip(), phone.strip(), address.strip(), notes.strip(), created_date))
+            conn.commit()
+            return cid
     except Exception:
-        try:
-            conn.rollback()
-        except Exception:
-            pass
         return None
-    finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
 
 
 def read_customers():
     cols = ['customer_id', 'name', 'email', 'phone', 'address', 'notes', 'created_date']
     try:
-        conn = get_conn()
-        cur = conn.cursor()
-        cur.execute('SELECT customer_id, name, email, phone, address, notes, created_date FROM customers ORDER BY id DESC')
-        rows = cur.fetchall()
+        with get_cursor() as (conn, cur):
+            cur.execute('SELECT customer_id, name, email, phone, address, notes, created_date FROM customers ORDER BY id DESC')
+            rows = cur.fetchall()
         out = []
         for r in rows:
             out.append(_row_to_dict(r, cols))
         return out
     except Exception:
         return []
-    finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
 
 
 def write_customers(customers):
     try:
-        conn = get_conn()
-        cur = conn.cursor()
-        # Replace all customers with provided list
-        cur.execute('DELETE FROM customers')
-        for c in (customers or []):
-            cur.execute('''
-                INSERT INTO customers(customer_id, name, email, phone, address, notes, created_date)
-                VALUES (?,?,?,?,?,?,?)
-            ''', (
-                c.get('customer_id'), c.get('name'), c.get('email'),
-                c.get('phone'), c.get('address'), c.get('notes'), c.get('created_date')
-            ))
-        conn.commit()
+        with get_cursor() as (conn, cur):
+            # Replace all customers with provided list
+            cur.execute('DELETE FROM customers')
+            for c in (customers or []):
+                cur.execute('''
+                    INSERT INTO customers(customer_id, name, email, phone, address, notes, created_date)
+                    VALUES (?,?,?,?,?,?,?)
+                ''', (
+                    c.get('customer_id'), c.get('name'), c.get('email'),
+                    c.get('phone'), c.get('address'), c.get('notes'), c.get('created_date')
+                ))
+            conn.commit()
     except Exception:
-        try:
-            conn.rollback()
-        except Exception:
-            pass
-    finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
+        pass
 
 
 def find_customer_by_name(name):
@@ -119,46 +88,15 @@ def find_customer_by_name(name):
         return []
     cols = ['customer_id', 'name', 'email', 'phone', 'address', 'notes', 'created_date']
     try:
-        conn = get_conn()
-        cur = conn.cursor()
-        cur.execute('SELECT customer_id, name, email, phone, address, notes, created_date FROM customers WHERE LOWER(name) LIKE ? LIMIT 50', (f'%{name_lower}%',))
-        rows = cur.fetchall()
+        with get_cursor() as (conn, cur):
+            cur.execute('SELECT customer_id, name, email, phone, address, notes, created_date FROM customers WHERE LOWER(name) LIKE ? LIMIT 50', (f'%{name_lower}%',))
+            rows = cur.fetchall()
         out = []
         for r in rows:
             out.append(_row_to_dict(r, cols))
         return out
     except Exception:
         return []
-    finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
-
-
-def find_or_create_customer(name):
-    if not name or not name.strip():
-        return None
-    search_name = name.strip()
-    existing = find_customer_by_name(search_name)
-    if existing:
-        # return the first matching customer's customer_id
-        first = existing[0]
-        if isinstance(first, dict):
-            return first.get('customer_id')
-    return add_customer(search_name)
-
-
-def get_customer_name_suggestions():
-    customers = read_customers()
-    names = []
-    for customer in customers:
-        if not customer:
-            continue
-        name = customer.get('name', '').strip()
-        if name:
-            names.append(name)
-    return sorted(set(names))
 
 
 def edit_customer(customer_id, name='', email='', phone='', address='', notes=''):
@@ -195,10 +133,9 @@ def delete_customer(customer_id):
 
 def get_customer_sales_summary(customer_id):
     try:
-        conn = get_conn()
-        cur = conn.cursor()
-        cur.execute('SELECT * FROM sales WHERE customer_id=? AND (deleted IS NULL OR deleted=0) ORDER BY datetime(date) DESC', (customer_id.strip(),))
-        rows = cur.fetchall()
+        with get_cursor() as (conn, cur):
+            cur.execute('SELECT * FROM sales WHERE customer_id=? AND (deleted IS NULL OR deleted=0) ORDER BY datetime(date) DESC', (customer_id.strip(),))
+            rows = cur.fetchall()
         sales_rows = [dict(r) if hasattr(r, 'keys') else dict(r) for r in rows]
         total_revenue = 0.0
         for row in sales_rows:
@@ -214,8 +151,3 @@ def get_customer_sales_summary(customer_id):
         }
     except Exception:
         return {'total_sales': 0, 'total_revenue': 0.0, 'sales_count': 0, 'recent_sales': []}
-    finally:
-        try:
-            conn.close()
-        except Exception:
-            pass

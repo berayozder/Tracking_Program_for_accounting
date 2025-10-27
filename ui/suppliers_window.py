@@ -5,6 +5,28 @@ from .theme import stripe_treeview, apply_theme, maximize_window, themed_button
 
 
 def open_suppliers_window(root):
+    import csv
+    def do_export_csv():
+        file_path = tk.filedialog.asksaveasfilename(
+            defaultextension='.csv',
+            filetypes=[('CSV files', '*.csv'), ('All files', '*.*')],
+            title='Export Suppliers to CSV'
+        )
+        if not file_path:
+            return
+        columns = [tree.heading(col)['text'] for col in tree['columns']]
+        data = []
+        for iid in tree.get_children():
+            values = tree.item(iid)['values']
+            data.append(values)
+        try:
+            with open(file_path, 'w', newline='', encoding='utf-8') as f:
+                writer = csv.writer(f)
+                writer.writerow(columns)
+                writer.writerows(data)
+            tk.messagebox.showinfo('Exported', f'Suppliers exported to {file_path}')
+        except Exception as e:
+            tk.messagebox.showerror('Error', f'Failed to export CSV: {e}')
     """Supplier Management Window (CSV-backed)."""
     win = tk.Toplevel(root)
     win.title('🏭 Supplier Management')
@@ -268,6 +290,7 @@ def open_suppliers_window(root):
     themed_button(left, text='➕ Add Supplier', variant='primary', command=do_add_supplier).pack(side='left', padx=(0, 8))
     themed_button(left, text='✏️ Edit Supplier', variant='success', command=do_edit_supplier).pack(side='left', padx=4)
     themed_button(left, text='🔄 Refresh', variant='primary', command=populate_tree).pack(side='left', padx=4)
+    themed_button(right, text='⬇️ Export CSV', variant='secondary', command=do_export_csv).pack(side='left', padx=4)
     themed_button(right, text='🗑️ Delete Supplier', variant='danger', command=do_delete_supplier).pack(side='left', padx=4)
     themed_button(right, text='Close', variant='secondary', command=win.destroy).pack(side='left', padx=(8, 0))
 

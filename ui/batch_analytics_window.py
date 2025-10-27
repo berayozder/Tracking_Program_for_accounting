@@ -440,6 +440,8 @@ def open_batch_analytics_window(root):
                     stripe_treeview(customer_tree, item_id, 'warning')     # Medium customer
                 
         except Exception as e:
+            print(f'[BatchAnalytics] Exception in populate_customer_tree: {e}')
+            import traceback; traceback.print_exc()
             messagebox.showerror('Error', f'Failed to load customer analytics: {e}')
     
     def refresh_all_data():

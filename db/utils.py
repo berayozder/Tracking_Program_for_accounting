@@ -1,4 +1,4 @@
-from .connection import DB_PATH,get_conn
+from .connection import DB_PATH, get_conn, get_cursor
 
 def float_or_none(v):
     try:
@@ -16,12 +16,10 @@ def delete_database_file():
     return False
 
 def reset_all_tables(clear_product_codes=True):
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute('DELETE FROM imports')
-    cur.execute('DELETE FROM inventory')
-    cur.execute('DELETE FROM expenses')
-    if clear_product_codes:
-        cur.execute('DELETE FROM product_codes')
-    conn.commit()
-    conn.close()
+    with get_cursor() as (conn, cur):
+        cur.execute('DELETE FROM imports')
+        cur.execute('DELETE FROM inventory')
+        cur.execute('DELETE FROM expenses')
+        if clear_product_codes:
+            cur.execute('DELETE FROM product_codes')
+        conn.commit()

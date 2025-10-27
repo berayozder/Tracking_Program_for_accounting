@@ -1,4 +1,4 @@
-from .connection import get_conn
+from .connection import get_cursor
 from .settings import get_base_currency
 from typing import Optional
 
@@ -63,12 +63,11 @@ def convert_amount(date_str: str, amount: float, from_ccy: str, to_ccy: str) -> 
 
 
 def get_cached_rate(date_str: str, from_ccy: str, to_ccy: str) -> Optional[float]:
-    conn = get_conn()
     try:
-        cur = conn.cursor()
-        cur.execute('SELECT rate FROM fx_cache WHERE date=? AND from_ccy=? AND to_ccy=?',
-                    (date_str, (from_ccy or '').upper(), (to_ccy or '').upper()))
-        row = cur.fetchone()
+        with get_cursor() as (conn, cur):
+            cur.execute('SELECT rate FROM fx_cache WHERE date=? AND from_ccy=? AND to_ccy=?',
+                        (date_str, (from_ccy or '').upper(), (to_ccy or '').upper()))
+            row = cur.fetchone()
         if row is None:
             return None
         if hasattr(row, 'keys') and 'rate' in row.keys():
@@ -77,30 +76,16 @@ def get_cached_rate(date_str: str, from_ccy: str, to_ccy: str) -> Optional[float
         return float(row[0]) if row[0] is not None else None
     except Exception:
         return None
-    finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
 
 
 def set_cached_rate(date_str: str, from_ccy: str, to_ccy: str, rate: float) -> None:
-    conn = get_conn()
     try:
-        cur = conn.cursor()
-        cur.execute('INSERT OR REPLACE INTO fx_cache(date, from_ccy, to_ccy, rate) VALUES (?,?,?,?)',
-                    (date_str, (from_ccy or '').upper(), (to_ccy or '').upper(), float(rate)))
-        conn.commit()
+        with get_cursor() as (conn, cur):
+            cur.execute('INSERT OR REPLACE INTO fx_cache(date, from_ccy, to_ccy, rate) VALUES (?,?,?,?)',
+                        (date_str, (from_ccy or '').upper(), (to_ccy or '').upper(), float(rate)))
+            conn.commit()
     except Exception:
-        try:
-            conn.rollback()
-        except Exception:
-            pass
-    finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
+        pass
 
 
 def get_rate_to_base(date_str: str, from_ccy: str) -> Optional[float]:
