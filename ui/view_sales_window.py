@@ -3,15 +3,18 @@ from tkinter import ttk, messagebox, filedialog, simpledialog
 from pathlib import Path
 import os
 import json
-import sys
-import subprocess
-from .theme import stripe_treeview, maximize_window, themed_button
-import core.fx_rates as fx_rates
+import csv
+import logging
+from typing import List, Dict, Any, Optional, Union, Tuple, Set
 
-# DAO imports
+from .theme import stripe_treeview, maximize_window, themed_button, apply_theme
+import core.fx_rates as fx_rates
 from db.sales_dao import list_sales, overwrite_sales, mark_sale_deleted, update_sale
-from db.returns_dao import list_returns, insert_return
+from db.returns_dao import list_returns, insert_return, get_distinct_return_reasons, add_return_reason
+from db import read_customers, list_sales as db_list_sales
 from db.imports_dao import get_sale_batch_info
+
+logger = logging.getLogger(__name__)
 
 # Column headers for Treeview / CSV
 DESIRED_COLS = [
@@ -21,41 +24,44 @@ DESIRED_COLS = [
     'FXToBase', 'SellingPriceBase', 'SaleCurrency', 'Deleted'
 ]
 
-# ────────────────────────────────
-# Data access wrappers
-# ────────────────────────────────
-
-def read_sales(include_deleted: bool = False):
+def read_sales(include_deleted: bool = False) -> List[Dict[str, Any]]:
+    """Fetch sales and normalize for UI."""
     return [_normalize_row_for_ui(r) for r in list_sales(include_deleted=include_deleted)]
 
-def write_sales(rows):
-    return overwrite_sales(rows)
+def write_sales(rows: List[Dict[str, Any]]) -> None:
+    """Wrapper to overwrite sales (legacy support)."""
+    overwrite_sales(rows)
 
-def read_returns():
+def read_returns() -> List[Dict[str, Any]]:
     """Fetch returns using DAO."""
     try:
-        return [ _normalize_row_for_ui(r) for r in list_returns() ]
-    except Exception:
-        try:
-            return list_returns()
-        except Exception:
-            return []
+        return [_normalize_row_for_ui(r) for r in list_returns()]
+    except Exception as e:
+        logger.error(f"Error reading returns: {e}")
+        return []
 
-
-def _normalize_row_for_ui(row):
-    """Return a copy of the DB row that contains both snake_case and TitleCase keys
-    so the legacy UI can read either shape."""
+def _normalize_row_for_ui(row: Union[Dict[str, Any], Any]) -> Dict[str, Any]:
+    """
+    Return a copy of the DB row that contains both snake_case and TitleCase keys
+    so the legacy UI can read either shape.
+    Also computes display fields for VAT analytics.
+    """
     try:
-        r = dict(row)
+        r = dict(row) if row else {}
     except Exception:
-        # If it's already a dict-like
-        r = {} if row is None else dict(row)
+        r = {}
 
     # Add VAT analytics fields for display
     try:
-        vat_rate = float(r.get('vat_rate', 18.0) or 18.0)
+        vat_rate_val = r.get('vat_rate')
+        if vat_rate_val is None:
+             vat_rate = 18.0
+        else:
+             vat_rate = float(vat_rate_val)
+             
         is_incl = int(r.get('is_vat_inclusive', 1) or 1)
         amt = float(r.get('selling_price', 0) or 0)
+        
         if is_incl:
             net = amt / (1 + vat_rate/100)
             vat_amt = amt - net
@@ -64,6 +70,7 @@ def _normalize_row_for_ui(row):
             net = amt
             vat_amt = amt * vat_rate/100
             gross = amt + vat_amt
+            
         r['VAT Rate'] = f"{vat_rate:.2f}"
         r['VAT Amount'] = f"{vat_amt:.2f}"
         r['Net'] = f"{net:.2f}"
@@ -73,7 +80,8 @@ def _normalize_row_for_ui(row):
         r['VAT Amount'] = ''
         r['Net'] = ''
         r['Gross'] = ''
-    # Mapping from UI TitleCase -> DB snake_case
+
+    # Mapping from UI TitleCase -> DB snake_case for compatibility
     mapping = {
         'Date': 'date',
         'Category': 'category',
@@ -89,53 +97,41 @@ def _normalize_row_for_ui(row):
         'SaleCurrency': 'sale_currency',
         'Deleted': 'deleted',
     }
+    
     for ui_k, db_k in mapping.items():
-        # Ensure both forms exist on the dict so existing UI code can access either
+        # Ensure both forms exist
         if ui_k not in r and db_k in r:
-            try:
-                r[ui_k] = r.get(db_k)
-            except Exception:
-                r[ui_k] = r.get(db_k)
+            r[ui_k] = r.get(db_k)
         if db_k not in r and ui_k in r:
-            try:
-                r[db_k] = r.get(ui_k)
-            except Exception:
-                r[db_k] = r.get(ui_k)
+            r[db_k] = r.get(ui_k)
+            
     return r
 
 
-def open_view_sales_window(root):
-    # Helper: Select all rows in the treeview
-    def select_all():
-        try:
-            tree.selection_set(tree.get_children())
-        except Exception:
-            pass
+def _export_csv(tree: ttk.Treeview, cols: List[str]):
+    """Export current treeview content to CSV."""
+    file_path = filedialog.asksaveasfilename(
+        defaultextension='.csv',
+        filetypes=[('CSV files', '*.csv'), ('All files', '*.*')],
+        title='Export Sales to CSV'
+    )
+    if not file_path:
+        return
+    try:
+        with open(file_path, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.writer(f)
+            writer.writerow(cols)
+            for iid in tree.get_children():
+                # Note: tree.item(iid)['values'] returns a tuple of strings
+                vals = tree.item(iid)['values']
+                writer.writerow(vals)
+        messagebox.showinfo('Exported', f'Sales exported to {file_path}')
+    except Exception as e:
+        messagebox.showerror('Error', f'Failed to export CSV: {e}')
 
-    # Helper: Export current table to CSV
-    def do_export_csv():
-        import csv
-        from tkinter import filedialog
-        file_path = filedialog.asksaveasfilename(
-            defaultextension='.csv',
-            filetypes=[('CSV files', '*.csv'), ('All files', '*.*')],
-            title='Export Sales to CSV'
-        )
-        if not file_path:
-            return
-        try:
-            with open(file_path, 'w', newline='', encoding='utf-8') as f:
-                writer = csv.writer(f)
-                writer.writerow(cols)
-                for iid in tree.get_children():
-                    vals = tree.item(iid)['values']
-                    writer.writerow(vals)
-            messagebox.showinfo('Exported', f'Sales exported to {file_path}')
-        except Exception as e:
-            messagebox.showerror('Error', f'Failed to export CSV: {e}')
-
-
-
+def open_view_sales_window(root: tk.Tk):
+    """Open the 'View Sales' window."""
+    
     # --- Variable and widget initialization section ---
     win = tk.Toplevel(root)
     win.title('View Sales')
@@ -166,16 +162,15 @@ def open_view_sales_window(root):
     show_deleted_cb = ttk.Checkbutton(filter_frame, text='Show Deleted', variable=show_deleted_var)
     show_deleted_cb.pack(side='left', padx=(0, 8))
 
-    # Refresh button
-    themed_button(filter_frame, text='Refresh', command=lambda: refresh(), variant='secondary', width=8).pack(side='left', padx=(0, 8))
+    # Refresh button placeholder (command added later)
+    refresh_btn = themed_button(filter_frame, text='Refresh', command=lambda: refresh(), variant='secondary', width=8)
+    refresh_btn.pack(side='left', padx=(0, 8))
+    
+    # Export button
+    themed_button(filter_frame, text='Export CSV', command=lambda: _export_csv(tree, cols), variant='secondary', width=10).pack(side='left', padx=(0,8))
 
     # Table
-    cols = [
-        'Date', 'Category', 'Subcategory', 'Quantity', 'SellingPrice',
-        'VAT Rate', 'VAT Amount', 'Net', 'Gross',
-        'Platform', 'ProductID', 'CustomerID', 'DocumentPath',
-        'FXToBase', 'SellingPriceBase', 'SaleCurrency', 'Deleted'
-    ]
+    cols = DESIRED_COLS
     tree = ttk.Treeview(main_container, columns=cols, show='headings', height=20, selectmode='extended')
     for col in cols:
         tree.heading(col, text=col)
@@ -191,11 +186,8 @@ def open_view_sales_window(root):
     selected_label = ttk.Label(main_container, textvariable=selected_var, font=('', 9))
     selected_label.pack(anchor='w', pady=(0, 8))
 
-    # Initial data
-    rows = [ _normalize_row_for_ui(r) for r in read_sales(include_deleted=show_deleted_var.get()) ]
-
-    # Helper filter functions for analytics
-    def compute_year_options(rows):
+    # Helper filter functions
+    def compute_year_options(rows: List[Dict]) -> List[str]:
         years = set()
         for r in rows:
             try:
@@ -204,30 +196,22 @@ def open_view_sales_window(root):
                     years.add(y)
             except Exception:
                 pass
-        years = sorted(years, reverse=True)
-        return ['All'] + years
+        return ['All'] + sorted(years, reverse=True)
 
-    def row_matches_year(r, yy):
-        if yy == 'All':
-            return True
-        try:
-            return str(r.get('Date', '')).startswith(str(yy))
-        except Exception:
-            return False
+    def row_matches_year(r: Dict, yy: str) -> bool:
+        if yy == 'All': return True
+        return str(r.get('Date', '')).startswith(str(yy))
 
-    def row_matches_search(r, q):
-        if not q:
-            return True
+    def row_matches_search(r: Dict, q: str) -> bool:
+        if not q: return True
         q = q.lower()
+        # Search across all values in the row
         for v in r.values():
-            try:
-                if q in str(v).lower():
-                    return True
-            except Exception:
-                pass
+            if v and q in str(v).lower():
+                return True
         return False
 
-    def row_matches_returned(r, return_filter, returned_ids):
+    def row_matches_returned(r: Dict, return_filter: str, returned_ids: Set[str]) -> bool:
         pid = (r.get('ProductID') or '').strip()
         if return_filter == 'All':
             return True
@@ -241,8 +225,8 @@ def open_view_sales_window(root):
     def get_customer_name_mapping():
         """Create mapping from customer ID to customer name."""
         try:
-            import db as db
-            customers = db.read_customers()
+            # We already imported read_customers at module level
+            customers = read_customers()
             return {c.get('customer_id', ''): c.get('name', '') for c in customers}
         except Exception:
             return {}
@@ -264,28 +248,19 @@ def open_view_sales_window(root):
             pass
         return [v]
 
-    def format_docs(paths):
-        """Serialize list of paths to JSON string with unique non-empty entries."""
-        cleaned = []
-        seen = set()
-        for p in paths or []:
-            s = str(p).strip()
-            if s and s not in seen:
-                seen.add(s)
-                cleaned.append(s)
-        return json.dumps(cleaned, ensure_ascii=False)
-
-    def populate_tree(all_rows, yy, q=''):
-        for r in tree.get_children():
-            tree.delete(r)
-        # Insert rows using original indices as iids so edits/deletes map correctly
+    def populate_tree(all_rows: List[Dict], yy: str, q: str = ''):
+        tree.delete(*tree.get_children())
+        
         shown = 0
-        total_sell = 0.0
-        total_sell_usd = 0.0
-        computed_usd_count = 0
-        total_vat = 0.0
-        total_net = 0.0
-        total_gross = 0.0
+        total_stats = {
+            'sell': 0.0,
+            'sell_usd': 0.0,
+            'vat': 0.0,
+            'net': 0.0,
+            'gross': 0.0,
+            'computed_usd_count': 0
+        }
+        
         returned_ids = set()
         try:
             for rr in read_returns():
@@ -293,140 +268,139 @@ def open_view_sales_window(root):
                 if pid:
                     returned_ids.add(pid)
         except Exception:
-            returned_ids = set()
+            pass
+            
+        return_filter = return_var.get()
+        
         for idx, r in enumerate(all_rows):
             is_returned = (r.get('ProductID') or '').strip() in returned_ids
-            if row_matches_year(r, yy) and row_matches_search(r, q) and row_matches_returned(r, return_var.get(), returned_ids):
+            
+            if (row_matches_year(r, yy) and 
+                row_matches_search(r, q) and 
+                row_matches_returned(r, return_filter, returned_ids)):
+                
                 vals = [r.get(c, '') for c in cols]
-                # Mark returned items visually
-                try:
-                    pid_idx = cols.index('ProductID')
-                    pidv = str(vals[pid_idx])
-                    if pidv in returned_ids:
-                        vals[pid_idx] = pidv + ' (Returned)'
-                except Exception:
-                    pass
-                try:
-                    customer_idx = cols.index('CustomerID')
-                    customer_id = str(vals[customer_idx])
-                    if customer_id and customer_id in customer_names:
-                        vals[customer_idx] = f"{customer_names[customer_id]}"
-                    elif customer_id and customer_id.strip():
-                        vals[customer_idx] = f"{customer_id} (Unknown)"
-                    else:
-                        vals[customer_idx] = ""
-                except Exception:
-                    pass
-                try:
-                    doc_idx = cols.index('DocumentPath')
-                    doc_raw = r.get('DocumentPath', '')
-                    doc_list = parse_docs(doc_raw)
-                    if len(doc_list) == 0:
-                        vals[doc_idx] = ''
-                    elif len(doc_list) == 1:
-                        vals[doc_idx] = doc_list[0]
-                    else:
-                        vals[doc_idx] = f"{len(doc_list)} docs"
-                except Exception:
-                    pass
-                # Insert row and apply tag for returned
+                
+                # --- Post-process values for display ---
+                
+                # Mark returned items text
+                pid_idx = cols.index('ProductID')
+                pid_val = str(vals[pid_idx])
+                if pid_val in returned_ids:
+                    vals[pid_idx] = f"{pid_val} (Returned)"
+                
+                # Resolve Customer Name
+                cust_idx = cols.index('CustomerID')
+                cust_id = str(vals[cust_idx])
+                if cust_id in customer_names:
+                    vals[cust_idx] = customer_names[cust_id]
+                elif cust_id.strip():
+                    vals[cust_idx] = f"{cust_id} (Unknown)"
+                    
+                # Format Document Count
+                doc_idx = cols.index('DocumentPath')
+                doc_list = parse_docs(r.get('DocumentPath', ''))
+                if not doc_list:
+                    vals[doc_idx] = ''
+                elif len(doc_list) == 1:
+                    vals[doc_idx] = doc_list[0]
+                else:
+                    vals[doc_idx] = f"{len(doc_list)} docs"
+
+                # Insert Row
                 tag = 'returned' if is_returned else ''
-                # If the row has an 'id' field (from DB), use it as iid so actions map to DB ids.
+                # Use DB ID as iid if available, else index
                 iid_val = str(r.get('id')) if r.get('id') is not None else str(idx)
                 tree.insert('', 0, iid=iid_val, values=vals, tags=(tag,))
                 shown += 1
-                # Only count non-returned sales in totals
+                
+                # Accumulate Totals (exclude returns)
                 if not is_returned:
                     try:
-                        total_sell += float(r.get('SellingPrice') or 0)
-                        total_vat += float(r.get('VAT Amount') or 0)
-                        total_net += float(r.get('Net') or 0)
-                        total_gross += float(r.get('Gross') or 0)
-                    except Exception:
-                        pass
-                    usd_val = None
-                    try:
-                        usd_val = float(r.get('SellingPriceUSD')) if r.get('SellingPriceUSD') not in (None, '') else None
-                    except Exception:
+                        total_stats['sell'] += float(r.get('SellingPrice') or 0)
+                        total_stats['vat'] += float(r.get('VAT Amount') or 0)
+                        total_stats['net'] += float(r.get('Net') or 0)
+                        total_stats['gross'] += float(r.get('Gross') or 0)
+                        
+                        # USD conversion logic
                         usd_val = None
-                    if usd_val is None:
-                        try:
-                            rate = fx_rates.get_rate_for_date(str(r.get('Date') or '').strip())
+                        if r.get('SellingPriceUSD') not in (None, ''):
+                             usd_val = float(r.get('SellingPriceUSD'))
+                        
+                        if usd_val is None:
+                            # Try computed conversion
+                            d_str = str(r.get('Date') or '').strip()
+                            rate = fx_rates.get_rate_for_date(d_str)
                             if rate and rate > 0:
                                 usd_val = float(r.get('SellingPrice') or 0) / float(rate)
-                                computed_usd_count += 1
-                        except Exception:
-                            usd_val = None
-                    if usd_val is not None:
-                        try:
-                            total_sell_usd += float(usd_val)
-                        except Exception:
-                            pass
-        suffix = f" (computed {computed_usd_count} from rates)" if computed_usd_count else ""
-        totals_var.set(f"Items: {shown}    Net: {total_net:.2f}    KDV: {total_vat:.2f}    Gross: {total_gross:.2f}    Total Selling (TRY): {total_sell:.2f}    Total Selling (USD): {total_sell_usd:.2f}{suffix}")
-        # Highlight returned rows — make them more visually noticeable
+                                total_stats['computed_usd_count'] += 1
+                        
+                        if usd_val is not None:
+                            total_stats['sell_usd'] += usd_val
+                    except Exception:
+                        pass
+
+        suffix = f" (computed {total_stats['computed_usd_count']} from rates)" if total_stats['computed_usd_count'] else ""
+        totals_var.set(
+            f"Items: {shown}    "
+            f"Net: {total_stats['net']:.2f}    "
+            f"KDV: {total_stats['vat']:.2f}    "
+            f"Gross: {total_stats['gross']:.2f}    "
+            f"Total Selling (TRY): {total_stats['sell']:.2f}    "
+            f"Total Selling (USD): {total_stats['sell_usd']:.2f}{suffix}"
+        )
+        
+        # Configure tags
+        stripe_treeview(tree)
         try:
-            # Apply striping first, then override returned tag so it stands out
-            stripe_treeview(tree)
-            # Stronger background and amber text, bold font for emphasis (distinct from error red)
             tree.tag_configure('returned', background='#fff9e6', foreground='#8a6d00', font=('', 9, 'bold'))
-            # Also configure a visible border-like highlight when possible
-            # (Some themes may ignore font or foreground on Treeview tags; this still helps on most platforms)
         except Exception:
-            try:
-                tree.tag_configure('returned', background='#fff4cc')
-            except Exception:
-                pass
+            pass
 
     def refresh():
+        """Reload sales and refresh the tree view."""
         new_rows = [ _normalize_row_for_ui(r) for r in read_sales(include_deleted=show_deleted_var.get()) ]
-        # Refresh year options (in case new prefixes were added)
+        
+        # Refresh year options
         vals = compute_year_options(new_rows)
         year_combo['values'] = vals
         if year_var.get() not in vals:
             year_combo.set('All')
+            
         populate_tree(new_rows, year_var.get(), search_var.get().strip())
-        try:
-            selected_var.set('Selected: 0')
-        except Exception:
-            pass
+        selected_var.set('Selected: 0')
 
-    def on_year_change(event=None):
-        # Re-populate using current file content and selected filter
-        refresh()
-
-    def on_search_change(event=None):
-        refresh()
-    def on_return_change(event=None):
-        refresh()
+    # Bind filter changes
+    year_combo.bind('<<ComboboxSelected>>', lambda e: refresh())
+    year_combo.bind('<Return>', lambda e: refresh())
+    
+    return_combo.bind('<<ComboboxSelected>>', lambda e: refresh())
+    show_deleted_cb.config(command=refresh)
+    
+    search_entry.bind('<KeyRelease>', lambda e: refresh())
 
     # Listen for sale updates from other windows
     def _on_external_update(event):
         refresh()
     
-    # Bind to root to catch events from other windows
-    # Note: We bind to the Toplevel 'win' but using protocol/bind_all usually better for app-wide events
-    # But event_generate('<<SaleRecorded>>') is usually done on root or specific widget.
-    # We will assume it is generated on root or we use bind_all.
     try:
         win.bind_all('<<SaleRecorded>>', _on_external_update, add='+')
         win.bind_all('<<ReturnRecorded>>', _on_external_update, add='+')
     except Exception:
         pass
 
-    # Clean up bindings when window is closed to avoid error
     def _on_close():
         try:
             win.unbind_all('<<SaleRecorded>>')
             win.unbind_all('<<ReturnRecorded>>')
             win.destroy()
         except Exception:
-            try:
-                win.destroy()
-            except Exception:
-                pass
+            pass
 
     win.protocol("WM_DELETE_WINDOW", _on_close)
+    
+    # Initial load
+    refresh()
 
     def get_selected_index():
         sel = tree.selection()

@@ -16,6 +16,7 @@ __all__ = [
     "delete_return",
     "undelete_return",
     "get_distinct_return_reasons",
+    "add_return_reason",
     "process_restock_change"
 ]
 
@@ -299,3 +300,11 @@ def get_distinct_return_reasons(limit: int = 200) -> List[str]:
             LIMIT ?
         """, (limit,))
         return [row[0] for row in cur.fetchall() if row and row[0]]
+
+def add_return_reason(reason: str) -> None:
+    """
+    Placeholder for adding a return reason to defaults.
+    Since reasons are distinct values from the `returns` table, 
+    this currently does not persist anything until used in a return.
+    """
+    pass

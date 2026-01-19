@@ -1,13 +1,51 @@
-#expenses_window.py
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 from datetime import datetime
-import db as db
+import logging
+from typing import List, Dict, Any, Tuple, Optional
+
+import db
 from .theme import apply_theme, maximize_window, themed_button
 
+logger = logging.getLogger(__name__)
 
-def open_expenses_window(root):
+"""
+Record Expense UI.
+Allows adding new expenses and viewing a paginated list of recent expenses.
+"""
 
+def _calculate_vat_breakdown(amount: float, vat_rate: float, is_inclusive: bool) -> Tuple[float, float, float]:
+    """Calculate net, vat, and gross amounts."""
+    try:
+        if is_inclusive:
+            net = amount / (1 + vat_rate / 100)
+            vat = amount - net
+            gross = amount
+        else:
+            net = amount
+            vat = amount * vat_rate / 100
+            gross = amount + vat
+        return net, vat, gross
+    except Exception:
+        return 0.0, 0.0, 0.0
+
+def _fetch_filtered_expenses(page: int, page_size: int, search: str = "") -> List[Dict[str, Any]]:
+    """Fetch and filter expenses for a specific page."""
+    offset = (page - 1) * page_size
+    # Note: Optimization would be to push search to DB, but preserving existing behavior for now.
+    rows = db.get_expenses(limit=page_size, offset=offset)
+    
+    if search:
+        s_lower = search.lower()
+        rows = [
+            r for r in rows 
+            if s_lower in str(r.get('category', '')).lower() or s_lower in str(r.get('notes', '')).lower()
+        ]
+    return rows
+
+def open_expenses_window(root: tk.Tk):
+    """Open the 'Record Expense' window."""
+    
     # Create window first so it's available for child widgets
     window = tk.Toplevel(root)
     window.title("Record Expense")
@@ -51,22 +89,15 @@ def open_expenses_window(root):
 
     # Pagination state
     page_size = 50
-    page_num = [1]  # mutable for closure
+    page_num = [1]  # mutable list for closure state
     last_search = [""]
-
-    def fetch_expenses_page(page, search=""):
-        offset = (page-1) * page_size
-        rows = db.get_expenses(limit=page_size, offset=offset)
-        # If search, filter in-memory (for now)
-        if search:
-            search_l = search.lower()
-            rows = [r for r in rows if search_l in str(r.get('category','')).lower() or search_l in str(r.get('notes','')).lower()]
-        return rows
 
     def update_table():
         tree.delete(*tree.get_children())
         search = last_search[0]
-        rows = fetch_expenses_page(page_num[0], search)
+        # Use module-level helper
+        rows = _fetch_filtered_expenses(page_num[0], page_size, search)
+        
         net_total = vat_total = gross_total = 0.0
         for r in rows:
             # Compute VAT/gross if not present
@@ -74,20 +105,22 @@ def open_expenses_window(root):
                 amount = float(r.get('amount', 0) or 0)
                 vat_rate = float(r.get('vat_rate', 0) or 0)
                 is_incl = int(r.get('is_vat_inclusive', 0) or 0)
-                if is_incl:
-                    net = amount / (1 + vat_rate/100)
-                    vat = amount - net
-                    gross = amount
-                else:
-                    net = amount
-                    vat = amount * vat_rate/100
-                    gross = amount + vat
+                net, vat, gross = _calculate_vat_breakdown(amount, vat_rate, bool(is_incl))
             except Exception:
                 net = amount = vat = gross = 0.0
-            tree.insert('', 'end', values=(r.get('date',''), r.get('category',''), f"{amount:.2f}", f"{vat:.2f}", f"{gross:.2f}", r.get('notes','')))
+                
+            tree.insert('', 'end', values=(
+                r.get('date', ''), 
+                r.get('category', ''), 
+                f"{amount:.2f}", 
+                f"{vat:.2f}", 
+                f"{gross:.2f}", 
+                r.get('notes', '')
+            ))
             net_total += net
             vat_total += vat
             gross_total += gross
+            
         totals_var.set(f"Net: {net_total:.2f}   VAT: {vat_total:.2f}   Gross: {gross_total:.2f}")
         page_lbl.config(text=f"Page {page_num[0]}")
 
@@ -99,7 +132,8 @@ def open_expenses_window(root):
     def go_next():
         # Only advance if there are more rows
         search = last_search[0]
-        rows = fetch_expenses_page(page_num[0]+1, search)
+        # Peek at next page
+        rows = _fetch_filtered_expenses(page_num[0] + 1, page_size, search)
         if rows:
             page_num[0] += 1
             update_table()
@@ -421,9 +455,10 @@ def open_expenses_window(root):
         except Exception:
             messagebox.showerror('Invalid date', 'Please use YYYY-MM-DD')
             return
-        amt = amount_entry.get().strip()
+            
+        amt_val = amount_entry.get().strip()
         try:
-            amt = float(amt)
+            amt = float(amt_val)
         except Exception:
             messagebox.showerror('Invalid amount', 'Amount must be a number')
             return
@@ -433,11 +468,14 @@ def open_expenses_window(root):
         selected_import_ids = get_selected_import_ids()
         cat = cat_entry.get().strip()
         notes = notes_entry.get().strip()
+        
         try:
-            vat_rate = float(vat_rate_var.get().replace(',', '.')) if vat_rate_var.get().strip() else None
+            vat_rate_val = vat_rate_var.get().strip()
+            vat_rate = float(vat_rate_val.replace(',', '.')) if vat_rate_val else None
         except Exception:
             messagebox.showerror('Invalid VAT', 'KDV Oranı geçerli bir sayı olmalı (örn: 18)')
             return
+            
         kdv_dahil = bool(kdv_dahil_var.get())
 
         try:
@@ -454,9 +492,10 @@ def open_expenses_window(root):
                 vat_rate=vat_rate,
                 vat_inclusive=kdv_dahil
             )
-            messagebox.showinfo('Saved', 'Expense saved')
-            window.destroy()
+            messagebox.showinfo('Saved', 'Expense saved successfully.')
+            window.destroy()  # Close window on success
         except Exception as e:
+            logger.error(f"Failed to save expense: {e}")
             messagebox.showerror('Error', f'Failed to save expense: {e}')
 
     is_import_var.trace_add('write', lambda *a: on_import_toggle())

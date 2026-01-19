@@ -1,57 +1,90 @@
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, filedialog
 from datetime import datetime
-from pathlib import Path
-import db as db
+import logging
+from typing import Optional, Dict, Any, List, Union
+
+import db
 import core.fx_rates as fx_rates
 import core.fx_cache as fx_cache
+from .theme import apply_theme, maximize_window, themed_button, ask_string
 
-"""Record Sale UI writing to CSV.
-CSV columns (canonical):
-Date, Category, Subcategory, Quantity, SellingPrice, Platform, ProductID, CustomerID, DocumentPath,
-FXToBase, SellingPriceBase, SaleCurrency
+logger = logging.getLogger(__name__)
+
+"""
+Record Sale UI.
+Standardizes user input and persists to DB via DAO.
 """
 
+def _normalize_sale_row(row: Dict[str, Any]) -> Dict[str, Any]:
+    """Normalize UI keys to DAO keys."""
+    return {
+        'date': row.get('date') or row.get('Date'),
+        'category': row.get('category') or row.get('Category'),
+        'subcategory': row.get('subcategory') or row.get('Subcategory'),
+        'quantity': row.get('quantity') or row.get('Quantity'),
+        'selling_price': row.get('selling_price') or row.get('SellingPrice') or row.get('price_per_item'),
+        'platform': row.get('platform') or row.get('Platform'),
+        'product_id': row.get('product_id') or row.get('ProductID'),
+        'customer_id': row.get('customer_id') or row.get('CustomerID'),
+        'document_path': row.get('document_path') or row.get('DocumentPath'),
+        'fx_to_base': row.get('fx_to_base') or row.get('FXToBase'),
+        'selling_price_base': row.get('selling_price_base') or row.get('SellingPriceBase') or row.get('SellingPriceUSD'),
+        'sale_currency': row.get('sale_currency') or row.get('SaleCurrency') or row.get('currency'),
+        'deleted': int(row.get('deleted', 0) or 0),
+        'vat_rate': row.get('vat_rate'),
+        'vat_amount': row.get('vat_amount'),
+        'is_vat_inclusive': row.get('is_vat_inclusive')
+    }
 
-
-def append_sale(row_dict):
-    """Persist a sale using the DB helper (backwards-compatible signature)."""
-    # Normalize UI/titlecase keys to DAO snake_case keys
+def _save_sale_to_db(row_dict: Dict[str, Any]) -> Optional[int]:
+    """Persist normalized sale dict to DB."""
     try:
-        normalized = {
-            'date': row_dict.get('date') or row_dict.get('Date'),
-            'category': row_dict.get('category') or row_dict.get('Category'),
-            'subcategory': row_dict.get('subcategory') or row_dict.get('Subcategory'),
-            'quantity': row_dict.get('quantity') or row_dict.get('Quantity'),
-            'selling_price': row_dict.get('selling_price') or row_dict.get('SellingPrice') or row_dict.get('price_per_item'),
-            'platform': row_dict.get('platform') or row_dict.get('Platform'),
-            'product_id': row_dict.get('product_id') or row_dict.get('ProductID'),
-            'customer_id': row_dict.get('customer_id') or row_dict.get('CustomerID'),
-            'document_path': row_dict.get('document_path') or row_dict.get('DocumentPath') or row_dict.get('document_path'),
-            'fx_to_base': row_dict.get('fx_to_base') or row_dict.get('FXToBase'),
-            'selling_price_base': row_dict.get('selling_price_base') or row_dict.get('SellingPriceBase') or row_dict.get('SellingPriceUSD'),
-            'sale_currency': row_dict.get('sale_currency') or row_dict.get('SaleCurrency') or row_dict.get('currency'),
-            'deleted': int(row_dict.get('deleted', 0) or 0),
-        }
-        # Prefer package-level add_sale; fallback to DAO module directly
-        try:
-            if hasattr(db, 'add_sale') and callable(getattr(db, 'add_sale')):
-                return db.add_sale(normalized)
-        except Exception:
-            # fall through to direct DAO
-            pass
-        try:
-            # direct import to avoid relying on db package exports
-            from db import sales_dao
-            return sales_dao.add_sale(normalized)
-        except Exception:
-            try:
-                import db.sales_dao as _sd
-                return _sd.add_sale(normalized)
-            except Exception:
-                return None
-    except Exception:
+        normalized = _normalize_sale_row(row_dict)
+        if hasattr(db, 'add_sale') and callable(db.add_sale):
+            return db.add_sale(normalized)
+        
+        # Fallback to direct import if top-level db init incomplete
+        from db import sales_dao
+        return sales_dao.add_sale(normalized)
+    except Exception as e:
+        logger.error(f"Failed to save sale: {e}")
         return None
+
+def _load_inventory_map() -> Dict[str, set]:
+    """Load inventory and return {category: {subcategories}} map."""
+    try:
+        inv_rows = db.get_inventory() or []
+        if not inv_rows:
+            try:
+                db.rebuild_inventory_from_imports()
+                inv_rows = db.get_inventory() or []
+            except Exception:
+                pass
+    except Exception:
+        inv_rows = []
+        
+    cat_map = {}
+    for r in inv_rows:
+        c = (r.get('category') or '').strip()
+        s = (r.get('subcategory') or '').strip()
+        if c:
+            cat_map.setdefault(c, set())
+            if s:
+                cat_map[c].add(s)
+    return cat_map
+
+def _get_platform_suggestions() -> List[str]:
+    try:
+        return sorted(db.get_distinct_sale_platforms() or [])
+    except Exception:
+        return []
+
+def _get_customer_suggestions() -> List[str]:
+    try:
+        return db.get_customer_name_suggestions()
+    except Exception:
+        return []
 
 
 def open_sales_window(root):
@@ -62,40 +95,19 @@ def open_sales_window(root):
     win.geometry('560x580')
     win.minsize(500, 520)
     try:
-        from .theme import maximize_window
         maximize_window(win)
     except Exception:
         pass
     
     # Apply theme to window
-    from .theme import apply_theme, themed_button, ask_string
     apply_theme(win)
     
     # Main container with padding
     container = ttk.Frame(win, padding=16)
     container.pack(fill='both', expand=True)
+
     # Build inventory category -> subcategory map from DB
-    inv_rows = []
-    try:
-        inv_rows = db.get_inventory() or []
-        # If inventory empty, attempt to rebuild from imports (in case DB was just initialized)
-        if not inv_rows:
-            try:
-                db.rebuild_inventory_from_imports()
-                inv_rows = db.get_inventory() or []
-            except Exception:
-                # If rebuild fails, continue with empty inventory
-                inv_rows = []
-    except Exception:
-        inv_rows = []
-    cat_to_subs = {}
-    for r in inv_rows:
-        c = (r.get('category') or '').strip()
-        s = (r.get('subcategory') or '').strip()
-        if c:
-            cat_to_subs.setdefault(c, set())
-            if s:
-                cat_to_subs[c].add(s)
+    cat_to_subs = _load_inventory_map()
     cat_list = sorted(cat_to_subs.keys())
 
     # Form section
@@ -326,12 +338,6 @@ def open_sales_window(root):
     platform_frame = ttk.Frame(form_section)
     platform_frame.pack(fill='x', pady=(0, 0))
     ttk.Label(platform_frame, text='Platform:', font=('', 9, 'bold')).pack(side='left', anchor='w')
-    def load_platform_suggestions():
-        try:
-            vals = db.get_distinct_sale_platforms()
-            return sorted(vals or [])
-        except Exception:
-            return []
 
     platform_e = ttk.Entry(platform_frame, width=27, font=('', 9))
     platform_e.pack(side='right', anchor='e')
@@ -372,7 +378,7 @@ def open_sales_window(root):
 
     def show_plat_suggestions(event=None):
         q = (platform_e.get() or '').strip().lower()
-        names = load_platform_suggestions()
+        names = _get_platform_suggestions()
         # If query empty, show all; else filter
         matches = names if not q else [n for n in names if q in n.lower()]
         if matches:
@@ -435,12 +441,6 @@ def open_sales_window(root):
     customer_frame.pack(fill='x', pady=(12, 0))
     ttk.Label(customer_frame, text='Customer (optional):', font=('', 9, 'bold')).pack(side='left', anchor='w')
 
-    def load_customer_suggestions():
-        try:
-            return db.get_customer_name_suggestions()
-        except Exception:
-            return []
-
     customer_e = ttk.Entry(customer_frame, width=27, font=('', 9))
     customer_e.pack(side='right', anchor='e')
 
@@ -475,7 +475,7 @@ def open_sales_window(root):
 
     def show_cust_suggestions(event=None):
         q = customer_e.get().strip().lower()
-        names = load_customer_suggestions()
+        names = _get_customer_suggestions()
         matches = [n for n in names if q and q in n.lower()]
         if matches:
             if not (cust_dropdown["win"] and tk.Toplevel.winfo_exists(cust_dropdown["win"])):
@@ -504,7 +504,6 @@ def open_sales_window(root):
                 pass
         else:
             _destroy_cust_dropdown()
-
     def customer_keydown(event):
         if event.keysym == 'Down' and cust_dropdown["win"] and tk.Toplevel.winfo_exists(cust_dropdown["win"]):
             try:
@@ -753,7 +752,7 @@ def open_sales_window(root):
         sale_ids_map = {} # pid -> sale_id
 
         for pid in product_ids:
-            new_sale_id = append_sale({
+            new_sale_id = _save_sale_to_db({
                 'Date': d,
                 'Category': cat,
                 'Subcategory': sub,
