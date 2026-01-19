@@ -121,6 +121,29 @@ def add_import(
         grand_total_value += imp_total
 
     # --- Distribute expense to imports, then to lines ---
+    if not allocation_groups:
+        # Simple import (no lines)
+        unit_cost_ccy = ordered_price if quantity else 0.0
+        unit_cost_ccy, unit_cost_base, fx_to_base = _compute_cost_base(date, unit_cost_ccy, cur_ccy, fx_override)
+        
+        # Add expense per unit if any
+        if expense_amount > 0 and quantity > 0:
+            extra = expense_amount / quantity
+            # We update the effective unit cost for the batch
+            unit_cost_ccy += extra
+            # Recalc base if needed or just add converted extra? 
+            # Ideally we recalculate base from new ccy cost if same currency, 
+            # but if expense was in base, it's complex. 
+            # For simplicity, assuming expense is in import currency or correctly converted before.
+            # _compute_cost_base handles the base conversion.
+            unit_cost_ccy, unit_cost_base, fx_to_base = _compute_cost_base(date, unit_cost_ccy, cur_ccy, fx_override)
+
+        create_import_batch(
+            import_id, date, category, subcategory, quantity, unit_cost_ccy, supplier, notes,
+            cur_ccy, fx_to_base, unit_cost_base, unit_cost_ccy, cur=_cur
+        )
+        update_inventory(category, subcategory, quantity, cur=_cur)
+
     for group_id, group_lines, imp_total in group_totals:
         if grand_total_value == 0 or imp_total == 0:
             continue
@@ -150,6 +173,8 @@ def add_import(
         write_audit('add', 'import', str(import_id), f"qty={quantity}; price={ordered_price}", cur=_cur)
     except Exception as e:
         raise
+    
+    return import_id
 
 
 # --- Helper: compute cost in base currency ---
@@ -392,7 +417,7 @@ def delete_import(import_id: int) -> None:
     with get_cursor() as (conn, cur):
         rebuild_inventory_from_imports(cur)
     
-    write_audit('delete', 'import', str(import_id), 'soft-deleted', cur=cur)
+    write_audit('delete', 'import', str(import_id), 'soft-deleted')
 
 
 def undelete_import(import_id: int) -> None:
@@ -411,7 +436,7 @@ def undelete_import(import_id: int) -> None:
     with get_cursor() as (conn, cur):
         rebuild_inventory_from_imports(cur)
     
-    write_audit('undelete', 'import', str(import_id), cur=cur)
+    write_audit('undelete', 'import', str(import_id))
 
 
 def get_available_batches(
@@ -455,7 +480,8 @@ def allocate_sale_to_batches(
     category: str,
     subcategory: str,
     quantity: float,
-    unit_sale_price_base: float
+    unit_sale_price_base: float,
+    sale_id: Optional[int] = None
 ) -> List[Dict]:
     """
     Allocate a sale to available import batches, update inventory, and record allocations.
@@ -494,11 +520,11 @@ def allocate_sale_to_batches(
             cur.execute('''
                 INSERT INTO sale_batch_allocations
                 (product_id, sale_date, category, subcategory, batch_id, quantity_from_batch,
-                 unit_cost, unit_sale_price, profit_per_unit)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 unit_cost, unit_sale_price, profit_per_unit, sale_id, quantity)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
                 product_id, sale_date, category or '', subcategory or '',
-                batch_id, allocated_from_batch, unit_cost_base, unit_sale_price_base, profit_per_unit
+                batch_id, allocated_from_batch, unit_cost_base, unit_sale_price_base, profit_per_unit, sale_id, allocated_from_batch
             ))
 
             # Update remaining quantity
@@ -636,7 +662,8 @@ def get_sale_batch_info(product_id: int) -> List[Dict]:
 def handle_return_batch_allocation(
     product_id: int,
     restock_quantity: float = 1.0,
-    restock_flag: bool = True
+    restock_flag: bool = True,
+    conn=None, cur=None
 ) -> List[Dict]:
     """
     Handle restocking inventory by reversing sale batch allocations for returns.
@@ -645,62 +672,70 @@ def handle_return_batch_allocation(
     if restock_quantity <= 0:
         return []
 
+    # If cursor provided, use it directly (no context manager)
+    if cur is not None:
+        return _handle_return_batch_allocation_internal(cur, product_id, restock_quantity, restock_flag)
+
+    # Otherwise separate connection
+    with get_cursor() as (conn, cur):
+        return _handle_return_batch_allocation_internal(cur, product_id, restock_quantity, restock_flag)
+
+def _handle_return_batch_allocation_internal(cur, product_id, restock_quantity, restock_flag):
     returned_to_batches = []
     remaining_to_return = restock_quantity
     total_lost_inventory_cost = 0.0
 
-    with get_cursor() as (conn, cur):
-        cur.execute('''
-            SELECT batch_id, quantity_from_batch, unit_cost
-            FROM sale_batch_allocations
-            WHERE product_id = ?
-            ORDER BY id DESC
-        ''', (product_id,))
+    cur.execute('''
+        SELECT batch_id, quantity_from_batch, unit_cost
+        FROM sale_batch_allocations
+        WHERE product_id = ?
+        ORDER BY id DESC
+    ''', (product_id,))
 
-        allocations = [dict(r) for r in cur.fetchall()]
+    allocations = [dict(r) for r in cur.fetchall()]
 
-        for alloc in allocations:
-            if remaining_to_return <= 0:
-                break
+    for alloc in allocations:
+        if remaining_to_return <= 0:
+            break
 
-            batch_id = alloc['batch_id']
-            original_allocation = alloc['quantity_from_batch']
-            unit_cost = alloc['unit_cost']
-            if batch_id is None:
-                continue
+        batch_id = alloc['batch_id']
+        original_allocation = alloc['quantity_from_batch']
+        unit_cost = alloc['unit_cost']
+        if batch_id is None:
+            continue
 
-            return_to_batch = min(remaining_to_return, original_allocation)
+        return_to_batch = min(remaining_to_return, original_allocation)
 
-            if restock_flag:
-                cur.execute(
-                    'UPDATE import_batches SET remaining_quantity = remaining_quantity + ? WHERE id = ?',
-                    (return_to_batch, batch_id)
-                )
-            else:
-                # Track lost inventory cost for un-restocked returns
-                total_lost_inventory_cost += return_to_batch * unit_cost
-                # Optionally, update a lost_inventory_cost field in import_batches if you add it to the schema
-                # cur.execute('UPDATE import_batches SET lost_inventory_cost = COALESCE(lost_inventory_cost, 0) + ? WHERE id = ?', (return_to_batch * unit_cost, batch_id))
-
+        if restock_flag:
             cur.execute(
-                'SELECT batch_date, supplier, category, subcategory FROM import_batches WHERE id = ?',
-                (batch_id,)
+                'UPDATE import_batches SET remaining_quantity = remaining_quantity + ? WHERE id = ?',
+                (return_to_batch, batch_id)
             )
-            batch_info = cur.fetchone()
-            batch_info = dict(batch_info) if batch_info else None
+        else:
+            # Track lost inventory cost for un-restocked returns
+            total_lost_inventory_cost += return_to_batch * unit_cost
+            # Optionally, update a lost_inventory_cost field in import_batches if you add it to the schema
+            # cur.execute('UPDATE import_batches SET lost_inventory_cost = COALESCE(lost_inventory_cost, 0) + ? WHERE id = ?', (return_to_batch * unit_cost, batch_id))
 
-            returned_to_batches.append({
-                'batch_id': batch_id,
-                'batch_date': batch_info['batch_date'] if batch_info else 'Unknown',
-                'supplier': batch_info['supplier'] if batch_info else 'Unknown',
-                'category': batch_info['category'] if batch_info else '',
-                'subcategory': batch_info['subcategory'] if batch_info else '',
-                'returned_quantity': return_to_batch,
-                'unit_cost': unit_cost,
-                'lost_inventory_cost': 0.0 if restock_flag else return_to_batch * unit_cost
-            })
+        cur.execute(
+            'SELECT batch_date, supplier, category, subcategory FROM import_batches WHERE id = ?',
+            (batch_id,)
+        )
+        batch_info = cur.fetchone()
+        batch_info = dict(batch_info) if batch_info else None
 
-            remaining_to_return -= return_to_batch
+        returned_to_batches.append({
+            'batch_id': batch_id,
+            'batch_date': batch_info['batch_date'] if batch_info else 'Unknown',
+            'supplier': batch_info['supplier'] if batch_info else 'Unknown',
+            'category': batch_info['category'] if batch_info else '',
+            'subcategory': batch_info['subcategory'] if batch_info else '',
+            'returned_quantity': return_to_batch,
+            'unit_cost': unit_cost,
+            'lost_inventory_cost': 0.0 if restock_flag else return_to_batch * unit_cost
+        })
+
+        remaining_to_return -= return_to_batch
 
     # Optionally, return total lost inventory cost for reporting
     # returned_to_batches.append({'total_lost_inventory_cost': total_lost_inventory_cost})

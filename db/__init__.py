@@ -286,8 +286,8 @@ try:
         read_customers,
         write_customers,
         find_customer_by_name,
-    # find_or_create_customer,  # Removed: not implemented
-    # get_customer_name_suggestions,  # Removed: not implemented
+        find_or_create_customer,
+        get_customer_name_suggestions,
         edit_customer,
         delete_customer,
         get_customer_sales_summary,
@@ -312,8 +312,8 @@ else:
         "read_customers",
         "write_customers",
         "find_customer_by_name",
-    # "find_or_create_customer",  # Removed: not implemented
-    # "get_customer_name_suggestions",  # Removed: not implemented
+        "find_or_create_customer",
+        "get_customer_name_suggestions",
         "edit_customer",
         "delete_customer",
         "get_customer_sales_summary",

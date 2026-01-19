@@ -43,6 +43,14 @@ def read_returns():
 
 
 def _normalize_row_for_ui(row):
+    """Return a copy of the DB row that contains both snake_case and TitleCase keys
+    so the legacy UI can read either shape."""
+    try:
+        r = dict(row)
+    except Exception:
+        # If it's already a dict-like
+        r = {} if row is None else dict(row)
+
     # Add VAT analytics fields for display
     try:
         vat_rate = float(r.get('vat_rate', 18.0) or 18.0)
@@ -65,13 +73,6 @@ def _normalize_row_for_ui(row):
         r['VAT Amount'] = ''
         r['Net'] = ''
         r['Gross'] = ''
-    """Return a copy of the DB row that contains both snake_case and TitleCase keys
-    so the legacy UI can read either shape."""
-    try:
-        r = dict(row)
-    except Exception:
-        # If it's already a dict-like
-        r = {} if row is None else dict(row)
     # Mapping from UI TitleCase -> DB snake_case
     mapping = {
         'Date': 'date',
@@ -164,6 +165,9 @@ def open_view_sales_window(root):
     show_deleted_var = tk.BooleanVar(value=False)
     show_deleted_cb = ttk.Checkbutton(filter_frame, text='Show Deleted', variable=show_deleted_var)
     show_deleted_cb.pack(side='left', padx=(0, 8))
+
+    # Refresh button
+    themed_button(filter_frame, text='Refresh', command=lambda: refresh(), variant='secondary', width=8).pack(side='left', padx=(0, 8))
 
     # Table
     cols = [
@@ -396,6 +400,34 @@ def open_view_sales_window(root):
     def on_return_change(event=None):
         refresh()
 
+    # Listen for sale updates from other windows
+    def _on_external_update(event):
+        refresh()
+    
+    # Bind to root to catch events from other windows
+    # Note: We bind to the Toplevel 'win' but using protocol/bind_all usually better for app-wide events
+    # But event_generate('<<SaleRecorded>>') is usually done on root or specific widget.
+    # We will assume it is generated on root or we use bind_all.
+    try:
+        win.bind_all('<<SaleRecorded>>', _on_external_update, add='+')
+        win.bind_all('<<ReturnRecorded>>', _on_external_update, add='+')
+    except Exception:
+        pass
+
+    # Clean up bindings when window is closed to avoid error
+    def _on_close():
+        try:
+            win.unbind_all('<<SaleRecorded>>')
+            win.unbind_all('<<ReturnRecorded>>')
+            win.destroy()
+        except Exception:
+            try:
+                win.destroy()
+            except Exception:
+                pass
+
+    win.protocol("WM_DELETE_WINDOW", _on_close)
+
     def get_selected_index():
         sel = tree.selection()
         if not sel:
@@ -546,6 +578,10 @@ def open_view_sales_window(root):
         dlg = tk.Toplevel(win)
         dlg.title('Mark as Returned')
         dlg.geometry('460x340')
+        dlg.transient(win)
+        dlg.grab_set()
+        from .theme import apply_theme
+        apply_theme(dlg)
 
         from datetime import datetime as _dt
         ttk.Label(dlg, text='Return Date (YYYY-MM-DD):').pack(pady=4)
@@ -673,6 +709,7 @@ def open_view_sales_window(root):
                     'restock': restock_final,
                     'reason': reason_var.get().strip(),
                     'doc_paths': doc_entry.get().strip(),
+                    'sale_id': rec.get('id'),
                 }
                 try:
                     print(f"[DEBUG] inserting return payload product_id={payload.get('product_id')} refund={payload.get('refund_amount')}")
@@ -737,6 +774,10 @@ def open_view_sales_window(root):
         dlg = tk.Toplevel(win)
         dlg.title('Edit Sale')
         dlg.geometry('460x600')
+        dlg.transient(win)
+        dlg.grab_set()
+        from .theme import apply_theme
+        apply_theme(dlg)
 
         entries = {}
 

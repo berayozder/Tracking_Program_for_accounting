@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import base64
 import os
-from cryptography.fernet import Fernet  # type: ignore
+try:
+    from cryptography.fernet import Fernet  # type: ignore
+except ImportError:
+    Fernet = None
 
 _KEY_ENV = "TRACKING_APP_SECRET_KEY"
 

@@ -85,3 +85,7 @@ data/*.bak
 
 # Private project notes
 todo.md
+
+# Root database
+accounting.db
+*.db

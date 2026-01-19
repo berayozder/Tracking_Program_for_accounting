@@ -547,6 +547,9 @@ def open_sales_window(root):
             messagebox.showerror('Missing Customer', 'Customer is required. Please select or enter a customer.')
             return
 
+        cat = cat_e.get().strip()
+        sub = sub_e.get().strip()
+
         # Product/category required
         if not cat:
             messagebox.showerror('Missing Category', 'Category is required.')
@@ -561,11 +564,6 @@ def open_sales_window(root):
         except Exception:
             messagebox.showerror('Invalid date', 'Please use YYYY-MM-DD')
             return
-        cat = cat_e.get().strip()
-        if not cat:
-            messagebox.showwarning('Missing', 'Category is required')
-            return
-        sub = sub_e.get().strip()
         if cat_list and cat not in cat_to_subs:
             if not messagebox.askyesno('Category not in inventory', 'Selected category is not in inventory. Continue?'):
                 return
@@ -714,44 +712,48 @@ def open_sales_window(root):
                 messagebox.showerror('Error', f'Failed to set/generate product codes: {e}')
                 return
         # =====================================================================================
-        # BATCH TRACKING: Allocate each sold item to batches using FIFO for cost tracking
+        # SAVE SALE FIRST (to get ID)
         # =====================================================================================
-        batch_allocations = []
-        for pid in product_ids:
-            # Allocate this individual item (quantity=1) to batches
-            # Convert entered unit price to base currency using selected sale currency
-            from_ccy = (sale_ccy_var.get() or 'TRY').upper()
-            base_ccy = db.get_base_currency()
-            unit_in_base = unit
-            if from_ccy != (base_ccy or '').upper():
-                try:
-                    conv = db.convert_amount(d, unit, from_ccy, base_ccy)
-                    if conv is not None:
-                        unit_in_base = conv
-                except Exception:
-                    pass
-            allocations = db.allocate_sale_to_batches(pid, d, cat, sub, 1, unit_in_base)
-            batch_allocations.extend(allocations)
-            
-            # Write sale record (same as before)
-            # SellingPriceBase holds the unit price in base currency
+        # VAT (KDV) fields
+        try:
+            vat_rate = float(vat_rate_var.get().replace(',', '.')) if vat_rate_var.get().strip() else None
+        except Exception:
+            messagebox.showerror('Invalid VAT', 'KDV Oranı geçerli bir sayı olmalı (örn: 18)')
+            return
+        kdv_dahil = bool(kdv_dahil_var.get())
+        # Compute VAT amount for this unit
+        from core.vat_utils import compute_vat
+        # For single unit VAT calculation
+        net_unit, vat_amt_unit = compute_vat(unit, vat_rate, kdv_dahil)
+
+        # Convert entered unit price to base currency using selected sale currency
+        from_ccy = (sale_ccy_var.get() or 'TRY').upper()
+        base_ccy = db.get_base_currency()
+        unit_in_base = unit
+        if from_ccy != (base_ccy or '').upper():
             try:
-                usd_unit = unit_in_base
+                conv = db.convert_amount(d, unit, from_ccy, base_ccy)
+                if conv is not None:
+                    unit_in_base = conv
             except Exception:
+                # If valid fx was entered manually
+                if fx and fx > 0:
+                    unit_in_base = unit / fx
+                pass
+        
+        # Calculate USD unit price for storage
+        try:
+            if fx and fx > 0:
                 usd_unit = unit / fx
+            else:
+                usd_unit = unit_in_base
+        except Exception:
+             usd_unit = unit_in_base
 
-            # VAT (KDV) fields
-            try:
-                vat_rate = float(vat_rate_var.get().replace(',', '.')) if vat_rate_var.get().strip() else None
-            except Exception:
-                messagebox.showerror('Invalid VAT', 'KDV Oranı geçerli bir sayı olmalı (örn: 18)')
-                return
-            kdv_dahil = bool(kdv_dahil_var.get())
-            # Compute VAT amount for this unit
-            from core.vat_utils import compute_vat
-            net, vat_amt = compute_vat(unit, vat_rate, kdv_dahil)
+        sale_ids_map = {} # pid -> sale_id
 
-            append_sale({
+        for pid in product_ids:
+            new_sale_id = append_sale({
                 'Date': d,
                 'Category': cat,
                 'Subcategory': sub,
@@ -765,9 +767,21 @@ def open_sales_window(root):
                 'FXToBase': fx,
                 'SellingPriceBase': usd_unit,
                 'vat_rate': vat_rate,
-                'vat_amount': vat_amt,
+                'vat_amount': vat_amt_unit,
                 'is_vat_inclusive': 1 if kdv_dahil else 0,
             })
+            if new_sale_id:
+                sale_ids_map[pid] = new_sale_id
+        
+        # =====================================================================================
+        # BATCH TRACKING: Allocate each sold item to batches using FIFO for cost tracking
+        # =====================================================================================
+        batch_allocations = []
+        for pid in product_ids:
+            s_id = sale_ids_map.get(pid)
+            # Allocate this individual item (quantity=1) to batches
+            allocations = db.allocate_sale_to_batches(pid, d, cat, sub, 1, unit_in_base, sale_id=s_id)
+            batch_allocations.extend(allocations)
 
         # Apply inventory reduction after saving sale (batch system handles this automatically)
         if reduce_var.get():
@@ -811,6 +825,19 @@ def open_sales_window(root):
                 msg = 'Sale recorded'
             messagebox.showinfo('Saved', msg)
         
+
+        
+        # Trigger global refresh for view sales
+        try:
+            win.master.event_generate('<<SaleRecorded>>')
+            # Fallback if master isn't root (unlikely but safe) (No, win.master IS root or Toplevel)
+        except Exception:
+            try:
+                # If master is not root, try to get root from it
+                win.master.master.event_generate('<<SaleRecorded>>')
+            except Exception:
+                pass
+
         win.destroy()
 
     # Action buttons

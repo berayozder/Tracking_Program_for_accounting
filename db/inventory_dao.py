@@ -53,8 +53,8 @@ def update_inventory(category, subcategory, quantity, cur=None):
 
 def rebuild_inventory_from_imports(cur=None):
     """
-    Rebuild the inventory table entirely from import totals.
-    Can optionally accept a cursor to avoid creating a new connection.
+    Rebuild the inventory table entirely from import_batches remaining quantities.
+    This ensures inventory reflects sales (which reduce batch quantities).
     """
     now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     close_cursor = False
@@ -64,28 +64,19 @@ def rebuild_inventory_from_imports(cur=None):
         ctx = get_cursor()
         conn, cursor = ctx.__enter__()
         close_cursor = True
-    cursor.execute('DELETE FROM inventory')
-    cursor.execute('''
-        INSERT INTO inventory (category, subcategory, quantity, last_updated)
-        SELECT category, subcategory, SUM(quantity), ?
-        FROM imports
-        GROUP BY category, subcategory
-    ''', (now,))
-    if not cur:
-        conn.commit()
 
     try:
-        cursor.execute('SELECT category, subcategory, SUM(quantity) as qty FROM active_imports GROUP BY category, subcategory')
-    except Exception:
-        cursor.execute('SELECT category, subcategory, SUM(quantity) as qty FROM imports GROUP BY category, subcategory')
-
-    rows = cursor.fetchall()
-    cursor.execute('DELETE FROM inventory')
-
-    for r in rows:
-        cursor.execute('INSERT INTO inventory (category, subcategory, quantity, last_updated) VALUES (?,?,?,?)',
-                       (r['category'] or '', r['subcategory'] or '', r['qty'] or 0, now))
-
-    cursor.connection.commit()
-    if close_cursor:
-        ctx.__exit__(None, None, None)
+        cursor.execute('DELETE FROM inventory')
+        cursor.execute('''
+            INSERT INTO inventory (category, subcategory, quantity, last_updated)
+            SELECT category, subcategory, COALESCE(SUM(remaining_quantity), 0), ?
+            FROM import_batches
+            WHERE COALESCE(deleted, 0) = 0
+            GROUP BY category, subcategory
+        ''', (now,))
+        
+        if not cur:
+            conn.commit()
+    finally:
+        if close_cursor:
+            ctx.__exit__(None, None, None)

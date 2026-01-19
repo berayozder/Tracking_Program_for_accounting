@@ -59,8 +59,10 @@ def void_transaction(table: str, id_col: str, id_value, by: Optional[str] = None
         return False
 
 
-def void_sale(sale_id: int, by: Optional[str] = None, reason: Optional[str] = None, create_reversal: bool = False) -> bool:
+def void_sale(sale_id: int, by: Optional[str] = None, reason: Optional[str] = None, create_reversal: bool = False, restock: bool = True) -> bool:
     """Void a sale. Optionally create a reversing sale row that negates quantity/revenue.
+    
+    If restock is True, restores inventory quantity and reverses batch allocations.
 
     If create_reversal is True, a new sale row is inserted with negated quantity
     and selling_price_base so ledger sums remain balanced; the original sale's
@@ -72,6 +74,12 @@ def void_sale(sale_id: int, by: Optional[str] = None, reason: Optional[str] = No
             row = cur.fetchone()
             if not row:
                 return False
+            
+            # Helper to access row fields safely
+            def _r(k, default=None):
+                if hasattr(row, 'keys'):
+                    return row[k] if k in row.keys() else default
+                return default # simplified, assume Row factory
 
             # mark original as voided
             now = _now_str()
@@ -80,17 +88,34 @@ def void_sale(sale_id: int, by: Optional[str] = None, reason: Optional[str] = No
             except Exception:
                 pass
 
+            # Restore Inventory & Batches
+            if restock:
+                try:
+                    # Import locally to avoid circular dependency
+                    from .imports_dao import handle_return_batch_allocation
+                    from .inventory_dao import update_inventory
+                    
+                    pid = _r('product_id')
+                    qty = float(_r('quantity') or 0)
+                    cat = _r('category')
+                    sub = _r('subcategory')
+
+                    # 1. Reverse Batch Allocations
+                    if pid:
+                         handle_return_batch_allocation(pid, qty, restock_flag=True, cur=cur)
+                    
+                    # 2. Update Inventory Table
+                    if cat:
+                        update_inventory(cat, sub, qty, cur=cur)
+                        
+                except Exception as e:
+                    print(f"Error restocking voided sale {sale_id}: {e}")
+
             reversal_id = None
             if create_reversal:
                 # Build reversal row: negate quantity and selling_price_base (if present)
-                qty = float(row['quantity'] or 0)
+                qty = float(_r('quantity') or 0)
                 new_qty = -qty
-                # safe access helper for sqlite3.Row
-                def _r(k):
-                    try:
-                        return row[k] if k in row.keys() else None
-                    except Exception:
-                        return None
 
                 unit_price = _r('selling_price')
                 sp_base = _r('selling_price_base')
@@ -121,7 +146,7 @@ def void_sale(sale_id: int, by: Optional[str] = None, reason: Optional[str] = No
                     pass
 
             try:
-                write_audit('void_sale', 'sales', str(sale_id), f'by={by}; reason={reason}; reversal_id={reversal_id}',cur=cur)
+                write_audit('void_sale', 'sales', str(sale_id), f'by={by}; reason={reason}; reversal_id={reversal_id}; restock={restock}',cur=cur)
             except Exception:
                 pass
         return True

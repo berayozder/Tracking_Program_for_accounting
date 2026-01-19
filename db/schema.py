@@ -13,7 +13,10 @@ def init_db_schema(conn):
     """Create tables, migrations, triggers, indexes, and views."""
     cur = conn.cursor()
 
+
     # --- CORE TABLES ---
+    
+    # 1. Imports
     cur.execute('''
     CREATE TABLE IF NOT EXISTS imports (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -25,9 +28,21 @@ def init_db_schema(conn):
         notes TEXT,
         category TEXT,
         subcategory TEXT,
-        currency TEXT DEFAULT 'TRY'
+        currency TEXT DEFAULT 'TRY',
+        total_import_expenses REAL DEFAULT 0.0,
+        include_expenses INTEGER DEFAULT 0,
+        deleted INTEGER DEFAULT 0,
+        deleted_at TEXT,
+        deleted_by TEXT,
+        delete_reason TEXT,
+        fx_to_base REAL,
+        vat_rate REAL DEFAULT 18.0,
+        vat_amount REAL DEFAULT 0.0,
+        is_vat_inclusive INTEGER DEFAULT 1,
+        document_path TEXT
     )
     ''')
+    # Migrations for existing DBs
     add_column_if_missing(cur, 'imports', 'total_import_expenses REAL DEFAULT 0.0')
     add_column_if_missing(cur, 'imports', 'include_expenses INTEGER DEFAULT 0')
     add_column_if_missing(cur, 'imports', 'deleted INTEGER DEFAULT 0')
@@ -40,11 +55,11 @@ def init_db_schema(conn):
     add_column_if_missing(cur, 'imports', 'is_vat_inclusive INTEGER DEFAULT 1')
     add_column_if_missing(cur, 'imports', 'document_path TEXT')
 
-
-    # Customers table for referential integrity
+    # 2. Customers
     cur.execute('''
     CREATE TABLE IF NOT EXISTS customers (
-        customer_id TEXT PRIMARY KEY,
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        customer_id TEXT UNIQUE NOT NULL,
         name TEXT NOT NULL,
         email TEXT,
         phone TEXT,
@@ -53,8 +68,21 @@ def init_db_schema(conn):
         created_date TEXT
     )
     ''')
+    
+    # 3. Product Codes
+    cur.execute('''
+    CREATE TABLE IF NOT EXISTS product_codes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        category TEXT,
+        subcategory TEXT,
+        cat_code TEXT,
+        sub_code TEXT,
+        next_serial INTEGER
+    )
+    ''')
+    cur.execute('CREATE UNIQUE INDEX IF NOT EXISTS ux_product_codes_cat_sub ON product_codes(category, subcategory)')
 
-    # Sales table with NOT NULL and foreign key constraints
+    # 4. Sales
     cur.execute('''
     CREATE TABLE IF NOT EXISTS sales (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -82,18 +110,72 @@ def init_db_schema(conn):
         voided_by TEXT,
         void_reason TEXT,
         reversal_id INTEGER,
-        FOREIGN KEY (product_id) REFERENCES product_codes(cat_code) ON DELETE RESTRICT,
-        FOREIGN KEY (customer_id) REFERENCES customers(customer_id) ON DELETE RESTRICT
-
-    );
+        FOREIGN KEY (product_id) REFERENCES product_codes(cat_code) ON DELETE SET NULL,
+        FOREIGN KEY (customer_id) REFERENCES customers(customer_id) ON DELETE SET NULL
+    )
     ''')
 
+    # 5. Expenses
+    cur.execute('''
+     CREATE TABLE IF NOT EXISTS expenses (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        date TEXT,
+        amount REAL,
+        is_import_related INTEGER DEFAULT 0,
+        import_id INTEGER,
+        category TEXT,
+        notes TEXT,
+        document_path TEXT,
+        currency TEXT,
+        vat_rate REAL DEFAULT 18.0,
+        vat_amount REAL DEFAULT 0.0,
+        is_vat_inclusive INTEGER DEFAULT 1,
+        net_amount REAL,
+        gross_amount REAL,
+        deleted INTEGER DEFAULT 0,
+        deleted_at TEXT,
+        deleted_by TEXT,
+        delete_reason TEXT
+    )
+    ''')
+
+    # Migrations for existing DBs
+    add_column_if_missing(cur, 'expenses', 'amount REAL')
+    add_column_if_missing(cur, 'expenses', 'is_import_related INTEGER DEFAULT 0')
+    add_column_if_missing(cur, 'expenses', 'import_id INTEGER')
+    add_column_if_missing(cur, 'expenses', 'category TEXT')
+    add_column_if_missing(cur, 'expenses', 'notes TEXT')
+    add_column_if_missing(cur, 'expenses', 'document_path TEXT')
+    add_column_if_missing(cur, 'expenses', 'currency TEXT')
+    add_column_if_missing(cur, 'expenses', 'vat_rate REAL DEFAULT 18.0')
+    add_column_if_missing(cur, 'expenses', 'vat_amount REAL DEFAULT 0.0')
+    add_column_if_missing(cur, 'expenses', 'is_vat_inclusive INTEGER DEFAULT 1')
+    add_column_if_missing(cur, 'expenses', 'net_amount REAL')
+    add_column_if_missing(cur, 'expenses', 'gross_amount REAL')
+    add_column_if_missing(cur, 'expenses', 'deleted INTEGER DEFAULT 0')
+    add_column_if_missing(cur, 'expenses', 'deleted_at TEXT')
+    add_column_if_missing(cur, 'expenses', 'deleted_by TEXT')
+    add_column_if_missing(cur, 'expenses', 'delete_reason TEXT')
+
+    # 6. Links and Helpers
     cur.execute('''
     CREATE TABLE IF NOT EXISTS expense_import_links (
         expense_id INTEGER,
         import_id INTEGER,
         PRIMARY KEY (expense_id, import_id),
         FOREIGN KEY (expense_id) REFERENCES expenses(id) ON DELETE CASCADE,
+        FOREIGN KEY (import_id) REFERENCES imports(id) ON DELETE CASCADE
+    )
+    ''')
+    
+    cur.execute('''
+    CREATE TABLE IF NOT EXISTS import_lines (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        import_id INTEGER,
+        category TEXT,
+        subcategory TEXT,
+        ordered_price REAL,
+        quantity REAL,
         FOREIGN KEY (import_id) REFERENCES imports(id) ON DELETE CASCADE
     )
     ''')
@@ -144,6 +226,18 @@ def init_db_schema(conn):
         FOREIGN KEY (batch_id) REFERENCES import_batches(id) ON DELETE CASCADE
     )
     ''')
+    add_column_if_missing(cur, 'sale_batch_allocations', 'product_id TEXT')
+    add_column_if_missing(cur, 'sale_batch_allocations', 'sale_date TEXT')
+    add_column_if_missing(cur, 'sale_batch_allocations', 'category TEXT')
+    add_column_if_missing(cur, 'sale_batch_allocations', 'subcategory TEXT')
+    add_column_if_missing(cur, 'sale_batch_allocations', 'quantity_from_batch REAL')
+    add_column_if_missing(cur, 'sale_batch_allocations', 'unit_cost REAL')
+    add_column_if_missing(cur, 'sale_batch_allocations', 'unit_sale_price REAL')
+    add_column_if_missing(cur, 'sale_batch_allocations', 'profit_per_unit REAL')
+    add_column_if_missing(cur, 'sale_batch_allocations', 'deleted INTEGER DEFAULT 0')
+    add_column_if_missing(cur, 'sale_batch_allocations', 'deleted_at TEXT')
+    add_column_if_missing(cur, 'sale_batch_allocations', 'deleted_by TEXT')
+    add_column_if_missing(cur, 'sale_batch_allocations', 'delete_reason TEXT')
 
     cur.execute('''
     CREATE TABLE IF NOT EXISTS returns (
@@ -169,53 +263,23 @@ def init_db_schema(conn):
         delete_reason TEXT
     )
     ''')
+    add_column_if_missing(cur, 'returns', 'product_id TEXT')
+    add_column_if_missing(cur, 'returns', 'sale_date TEXT')
+    add_column_if_missing(cur, 'returns', 'category TEXT')
+    add_column_if_missing(cur, 'returns', 'subcategory TEXT')
+    add_column_if_missing(cur, 'returns', 'unit_price REAL')
+    add_column_if_missing(cur, 'returns', 'selling_price REAL')
+    add_column_if_missing(cur, 'returns', 'platform TEXT')
+    add_column_if_missing(cur, 'returns', 'refund_amount REAL')
+    add_column_if_missing(cur, 'returns', 'refund_currency TEXT')
+    add_column_if_missing(cur, 'returns', 'refund_amount_base REAL')
+    add_column_if_missing(cur, 'returns', 'restock INTEGER')
+    add_column_if_missing(cur, 'returns', 'reason TEXT')
+    add_column_if_missing(cur, 'returns', 'doc_paths TEXT')
+    add_column_if_missing(cur, 'returns', 'restock_processed INTEGER DEFAULT 0')
+    add_column_if_missing(cur, 'returns', 'deleted INTEGER DEFAULT 0')
 
-    cur.execute('''
-    CREATE TABLE IF NOT EXISTS sales (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        date TEXT NOT NULL,
-        category TEXT NOT NULL,
-        subcategory TEXT,
-        quantity REAL NOT NULL,
-        selling_price REAL NOT NULL,
-        platform TEXT,
-        product_id TEXT NOT NULL,
-        customer_id TEXT NOT NULL,
-        document_path TEXT,
-        fx_to_base REAL,
-        selling_price_base REAL,
-        sale_currency TEXT,
-        vat_rate REAL NOT NULL DEFAULT 18.0,
-        vat_amount REAL NOT NULL DEFAULT 0.0,
-        is_vat_inclusive INTEGER NOT NULL DEFAULT 1,
-        deleted INTEGER DEFAULT 0,
-        deleted_at TEXT,
-        deleted_by TEXT,
-        delete_reason TEXT,
-        voided INTEGER DEFAULT 0,
-        voided_at TEXT,
-        voided_by TEXT,
-        void_reason TEXT,
-        reversal_id INTEGER,
-        FOREIGN KEY (product_id) REFERENCES product_codes(cat_code) ON DELETE SET NULL,
-        FOREIGN KEY (customer_id) REFERENCES customers(customer_id) ON DELETE SET NULL
-    )
-    ''')
-
-    # Ensure customers table exists for foreign key
-    cur.execute('''
-    CREATE TABLE IF NOT EXISTS customers (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        customer_id TEXT UNIQUE NOT NULL,
-        name TEXT NOT NULL,
-        email TEXT,
-        phone TEXT,
-        address TEXT,
-        notes TEXT,
-        created_date TEXT
-    )
-    ''')
-
+    # 7. Users and Logs
     cur.execute('''
     CREATE TABLE IF NOT EXISTS users (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -239,6 +303,7 @@ def init_db_schema(conn):
     )
     ''')
 
+    # 8. Inventory Cache
     cur.execute('''
     CREATE TABLE IF NOT EXISTS inventory (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -249,25 +314,12 @@ def init_db_schema(conn):
     )
     ''')
 
-    # Application settings (key/value)
     cur.execute('''
     CREATE TABLE IF NOT EXISTS settings (
         key TEXT PRIMARY KEY,
         value TEXT
     )
     ''')
-
-    cur.execute('''
-    CREATE TABLE IF NOT EXISTS product_codes (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        category TEXT,
-        subcategory TEXT,
-        cat_code TEXT,
-        sub_code TEXT,
-        next_serial INTEGER
-    )
-    ''')
-    cur.execute('CREATE UNIQUE INDEX IF NOT EXISTS ux_product_codes_cat_sub ON product_codes(category, subcategory)')
 
     cur.execute('''
     CREATE TABLE IF NOT EXISTS fx_cache (

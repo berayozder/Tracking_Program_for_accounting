@@ -12,7 +12,7 @@ from typing import Optional
 from core.vat_utils import compute_vat
 
 
-def add_expense(date, amount, is_import_related=False, import_id=None, category=None, notes=None, document_path=None, import_ids=None, currency: Optional[str] = None, conn=None, cur=None):
+def add_expense(date, amount, is_import_related=False, import_id=None, category=None, notes=None, document_path=None, import_ids=None, currency: Optional[str] = None, vat_rate=20.0, vat_inclusive=True, conn=None, cur=None):
     ids = []
     if import_ids:
         for v in import_ids:
@@ -33,22 +33,21 @@ def add_expense(date, amount, is_import_related=False, import_id=None, category=
 
     enc_notes = encrypt_str(notes or '')
     exp_ccy = ((currency or get_default_expense_currency() or get_base_currency() or '')).upper()
-    # VAT logic
-    vat_rate = 18.0
-    is_vat_inclusive = True
-    if isinstance(notes, dict):
-        vat_rate = float(notes.get('vat_rate', 18.0))
-        is_vat_inclusive = bool(notes.get('is_vat_inclusive', True))
-    net, vat = compute_vat(amount, vat_rate, is_vat_inclusive)
+    
+    net, vat = compute_vat(amount, vat_rate, vat_inclusive)
+    
+    net_amount = net
+    gross_amount = amount if vat_inclusive else (amount + vat)
+
     if conn is not None and cur is not None:
         _conn, _cur = conn, cur
     else:
         from .connection import get_cursor
         with get_cursor() as (_conn, _cur):
-            return add_expense(date, amount, is_import_related, import_id, category, notes, document_path, import_ids, currency, conn=_conn, cur=_cur)
+            return add_expense(date, amount, is_import_related, import_id, category, notes, document_path, import_ids, currency, vat_rate, vat_inclusive, conn=_conn, cur=_cur)
     try:
-        _cur.execute('''INSERT INTO expenses (date, amount, is_import_related, import_id, category, notes, document_path, currency, vat_rate, vat_amount, is_vat_inclusive)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?)''', (date, amount, 1 if is_import_related else 0, first_id, category, enc_notes, document_path, exp_ccy, vat_rate, vat, 1 if is_vat_inclusive else 0))
+        _cur.execute('''INSERT INTO expenses (date, amount, is_import_related, import_id, category, notes, document_path, currency, vat_rate, vat_amount, is_vat_inclusive, net_amount, gross_amount)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)''', (date, amount, 1 if is_import_related else 0, first_id, category, enc_notes, document_path, exp_ccy, vat_rate, vat, 1 if vat_inclusive else 0, net_amount, gross_amount))
         expense_id = _cur.lastrowid
         try:
             for iid in ids:
@@ -74,16 +73,18 @@ def add_expense(date, amount, is_import_related=False, import_id=None, category=
                     print(f"[DEBUG] Failed to recompute import batch for {iid}: {e}")
     except Exception as e:
         print(f"[DEBUG] Exception during recompute_import_batches: {e}")
+    
+    return expense_id
 
 
 
 
-def get_expenses(limit=500):
+def get_expenses(limit=500, offset=0):
     with get_cursor() as (conn, cur):
         try:
-            cur.execute('SELECT id, date, amount, is_import_related, import_id, category, notes, document_path, currency, vat_rate, vat_amount, is_vat_inclusive FROM active_expenses ORDER BY id DESC LIMIT ?', (limit,))
+            cur.execute('SELECT id, date, amount, is_import_related, import_id, category, notes, document_path, currency, vat_rate, vat_amount, is_vat_inclusive FROM active_expenses ORDER BY id DESC LIMIT ? OFFSET ?', (limit, offset))
         except Exception:
-            cur.execute('SELECT id, date, amount, is_import_related, import_id, category, notes, document_path, currency, vat_rate, vat_amount, is_vat_inclusive FROM expenses ORDER BY id DESC LIMIT ?', (limit,))
+            cur.execute('SELECT id, date, amount, is_import_related, import_id, category, notes, document_path, currency, vat_rate, vat_amount, is_vat_inclusive FROM expenses ORDER BY id DESC LIMIT ? OFFSET ?', (limit, offset))
         rows = [dict(r) for r in cur.fetchall()]
 
     for r in rows:
@@ -97,7 +98,7 @@ def get_expenses(limit=500):
     return rows
 
 
-def edit_expense(expense_id, date, amount, is_import_related=False, import_id=None, category=None, notes=None, document_path=None, import_ids=None, currency: Optional[str] = None):
+def edit_expense(expense_id, date, amount, is_import_related=False, import_id=None, category=None, notes=None, document_path=None, import_ids=None, currency: Optional[str] = None, vat_rate=20.0, vat_inclusive=True):
 
     # --- ids logic ---
     ids = []
@@ -120,16 +121,15 @@ def edit_expense(expense_id, date, amount, is_import_related=False, import_id=No
 
     enc_notes = encrypt_str(notes or '')
     exp_ccy = ((currency or get_default_expense_currency() or get_base_currency() or '')).upper()
-    # VAT logic
-    vat_rate = 18.0
-    is_vat_inclusive = True
-    if isinstance(notes, dict):
-        vat_rate = float(notes.get('vat_rate', 18.0))
-        is_vat_inclusive = bool(notes.get('is_vat_inclusive', True))
-    net, vat = compute_vat(amount, vat_rate, is_vat_inclusive)
+    
+    net, vat = compute_vat(amount, vat_rate, vat_inclusive)
+    
+    net_amount = net
+    gross_amount = amount if vat_inclusive else (amount + vat)
+    
     with get_cursor() as (conn, cur):
-        cur.execute('''UPDATE expenses SET date=?, amount=?, is_import_related=?, import_id=?, category=?, notes=?, document_path=?, currency=?, vat_rate=?, vat_amount=?, is_vat_inclusive=? WHERE id=?''',
-                    (date, amount, 1 if is_import_related else 0, first_id, category, enc_notes, document_path, exp_ccy, vat_rate, vat, 1 if is_vat_inclusive else 0, expense_id))
+        cur.execute('''UPDATE expenses SET date=?, amount=?, is_import_related=?, import_id=?, category=?, notes=?, document_path=?, currency=?, vat_rate=?, vat_amount=?, is_vat_inclusive=?, net_amount=?, gross_amount=? WHERE id=?''',
+                    (date, amount, 1 if is_import_related else 0, first_id, category, enc_notes, document_path, exp_ccy, vat_rate, vat, 1 if vat_inclusive else 0, net_amount, gross_amount, expense_id))
         try:
             cur.execute('DELETE FROM expense_import_links WHERE expense_id=?', (expense_id,))
             for iid in ids:

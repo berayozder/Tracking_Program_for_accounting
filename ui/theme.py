@@ -240,11 +240,12 @@ def install_basic_shortcuts(root: Union[tk.Tk, tk.Toplevel]):
 
     # Text/Entry widget edit bindings via virtual events
     def bind_widget_class_sequences():
-        for cls in ('Entry', 'Text'):
+        # Include ttk classes which might not inherit bindings globally
+        for cls in ('Entry', 'Text', 'TEntry', 'TCombobox'):
             root.bind_class(cls, f'<{mod}-a>', lambda e: (e.widget.select_range(0, 'end') if hasattr(e.widget, 'select_range') else e.widget.tag_add('sel', '1.0', 'end'), 'break'))
-            root.bind_class(cls, f'<{mod}-c>', lambda e: (root.event_generate('<<Copy>>'), 'break'))
-            root.bind_class(cls, f'<{mod}-x>', lambda e: (root.event_generate('<<Cut>>'), 'break'))
-            root.bind_class(cls, f'<{mod}-v>', lambda e: (root.event_generate('<<Paste>>'), 'break'))
+            root.bind_class(cls, f'<{mod}-c>', lambda e: (e.widget.event_generate('<<Copy>>'), 'break'))
+            root.bind_class(cls, f'<{mod}-x>', lambda e: (e.widget.event_generate('<<Cut>>'), 'break'))
+            root.bind_class(cls, f'<{mod}-v>', lambda e: (e.widget.event_generate('<<Paste>>'), 'break'))
 
     bind_widget_class_sequences()
 

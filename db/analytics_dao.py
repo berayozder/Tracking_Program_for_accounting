@@ -303,7 +303,8 @@ def get_monthly_sales_profit(year: int):
     try:
         with get_cursor() as (conn2, cur2):
             cur2.execute("SELECT COUNT(1) AS c FROM returns WHERE (deleted IS NULL OR deleted = 0)")
-            has_returns = (cur2.fetchone() or {}).get('c', 0) > 0
+            row = cur2.fetchone()
+            has_returns = (row['c'] if row else 0) > 0
     except Exception:
         has_returns = False
 
@@ -423,7 +424,8 @@ def get_yearly_sales_profit():
     try:
         with get_cursor() as (conn2, cur2):
             cur2.execute("SELECT COUNT(1) AS c FROM returns")
-            has_returns = (cur2.fetchone() or {}).get('c', 0) > 0
+            row = cur2.fetchone()
+            has_returns = (row['c'] if row else 0) > 0
     except Exception:
         has_returns = False
 
@@ -504,7 +506,8 @@ def get_yearly_return_impact():
     try:
         with get_cursor() as (conn2, cur2):
             cur2.execute("SELECT COUNT(1) AS c FROM returns")
-            has_returns = (cur2.fetchone() or {}).get('c', 0) > 0
+            row = cur2.fetchone()
+            has_returns = (row['c'] if row else 0) > 0
     except Exception:
         has_returns = False
 

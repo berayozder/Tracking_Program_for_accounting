@@ -8,6 +8,21 @@ from .theme import apply_theme, maximize_window, themed_button
 
 def open_expenses_window(root):
 
+    # Create window first so it's available for child widgets
+    window = tk.Toplevel(root)
+    window.title("Record Expense")
+    # Slightly reduced default height so action bar (Save) is visible on shorter screens
+    window.geometry("620x680")
+    try:
+        window.minsize(560, 560)
+    except Exception:
+        pass
+    try:
+        apply_theme(window)
+        maximize_window(window)
+    except Exception:
+        pass
+
     # --- Paginated Table Section ---
     table_frame = ttk.LabelFrame(window, text="Expenses Table (Paginated)", padding=8)
     table_frame.pack(fill='both', expand=True, padx=8, pady=8)
@@ -108,19 +123,8 @@ def open_expenses_window(root):
     update_table()
     db.init_db()
 
-    window = tk.Toplevel(root)
-    window.title("Record Expense")
-    # Slightly reduced default height so action bar (Save) is visible on shorter screens
-    window.geometry("620x680")
-    try:
-        window.minsize(560, 560)
-    except Exception:
-        pass
-    try:
-        apply_theme(window)
-        maximize_window(window)
-    except Exception:
-        pass
+    # Window already created at top
+    pass
 
     # Scrollable content area so bottom action bar is always visible
     content_container = ttk.Frame(window)
@@ -155,7 +159,7 @@ def open_expenses_window(root):
 
     # --- VAT (KDV) Fields ---
     ttk.Label(form_parent, text='KDV Oranı (%):').pack(pady=4)
-    vat_rate_var = tk.StringVar(value='18')
+    vat_rate_var = tk.StringVar(value='20')
     vat_rate_entry = ttk.Entry(form_parent, width=10, textvariable=vat_rate_var)
     vat_rate_entry.pack(pady=2)
 
@@ -438,10 +442,16 @@ def open_expenses_window(root):
 
         try:
             db.add_expense(
-                d, amt, is_imp, vat_rate, cat, notes,
+                date=d,
+                amount=amt,
+                is_import_related=is_imp,
+                import_id=None,
+                category=cat,
+                notes=notes,
                 document_path=document_path,
                 import_ids=selected_import_ids,
                 currency=expense_ccy_var.get(),
+                vat_rate=vat_rate,
                 vat_inclusive=kdv_dahil
             )
             messagebox.showinfo('Saved', 'Expense saved')

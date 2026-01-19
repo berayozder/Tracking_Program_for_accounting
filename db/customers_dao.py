@@ -147,7 +147,34 @@ def get_customer_sales_summary(customer_id):
             'total_sales': len(sales_rows),
             'total_revenue': total_revenue,
             'sales_count': len(sales_rows),
-            'recent_sales': sales_rows[:10]
         }
     except Exception:
         return {'total_sales': 0, 'total_revenue': 0.0, 'sales_count': 0, 'recent_sales': []}
+
+
+def find_or_create_customer(name: str) -> str:
+    """Find a customer by exact name (case-insensitive) or create one. Returns customer_id."""
+    name = (name or '').strip()
+    if not name:
+        return None
+    try:
+        found = find_customer_by_name(name)
+        # Check for exact match
+        for c in found:
+            if (c.get('name') or '').strip().lower() == name.lower():
+                return c.get('customer_id')
+        # Not found, create
+        return add_customer(name)
+    except Exception:
+        return None
+
+
+def get_customer_name_suggestions() -> list:
+    """Return list of distinct customer names."""
+    try:
+        customers = read_customers()
+        names = {c.get('name') for c in customers if c.get('name')}
+        return sorted(names)
+    except Exception:
+        return []
+
