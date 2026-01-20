@@ -1,7 +1,9 @@
+from __future__ import annotations
 import tkinter as tk
 from tkinter import ttk, messagebox
-import db as db
-from .theme import stripe_treeview, maximize_window, themed_button
+import db
+import traceback
+from .theme import stripe_treeview, maximize_window, themed_button, apply_theme
 
 def open_batch_analytics_window(root):
     """
@@ -22,7 +24,6 @@ def open_batch_analytics_window(root):
         pass
     
     # Apply theme to window
-    from .theme import apply_theme
     apply_theme(win)
     
     # Main container with padding
@@ -441,7 +442,7 @@ def open_batch_analytics_window(root):
                 
         except Exception as e:
             print(f'[BatchAnalytics] Exception in populate_customer_tree: {e}')
-            import traceback; traceback.print_exc()
+            traceback.print_exc()
             messagebox.showerror('Error', f'Failed to load customer analytics: {e}')
     
     def refresh_all_data():

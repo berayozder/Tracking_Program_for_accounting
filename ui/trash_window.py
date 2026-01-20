@@ -1,6 +1,7 @@
+from __future__ import annotations
 import tkinter as tk
 from tkinter import ttk, messagebox
-import db as db
+import db
 
 
 def _rows_for_table(table: str, extra_where: str = ''):

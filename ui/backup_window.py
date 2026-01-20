@@ -1,8 +1,10 @@
+from __future__ import annotations
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 from datetime import datetime
 from pathlib import Path
 import shutil
+import threading
 import db as db
 from .theme import maximize_window, themed_button
 
@@ -57,16 +59,19 @@ def open_backup_window(root):
     btns.pack(fill='x', padx=12, pady=(0, 12))
 
     def backup_now():
-        try:
-            BACKUP_DIR.mkdir(parents=True, exist_ok=True)
-            stamp = datetime.now().strftime('%Y%m%d-%H%M%S')
-            dest = BACKUP_DIR / f"app-{stamp}.db"
-            shutil.copy2(db.DB_PATH, dest)
-            with db.get_cursor() as (conn, cur):
-                db.write_audit('backup', 'database', str(dest), f"Backup created: {dest}", cur=cur)
-            messagebox.showinfo('Backup', f'Backup created at:\n{dest}')
-        except Exception as e:
-            messagebox.showerror('Backup', f'Failed to backup: {e}')
+        def _do():
+            try:
+                BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+                stamp = datetime.now().strftime('%Y%m%d-%H%M%S')
+                dest = BACKUP_DIR / f"app-{stamp}.db"
+                shutil.copy2(db.DB_PATH, dest)
+                with db.get_cursor() as (conn, cur):
+                    db.write_audit('backup', 'database', str(dest), f"Backup created: {dest}", cur=cur)
+                win.after(0, lambda: messagebox.showinfo('Backup', f'Backup created at:\n{dest}', parent=win))
+            except Exception as e:
+                win.after(0, lambda: messagebox.showerror('Backup', f'Failed to backup: {e}', parent=win))
+        
+        threading.Thread(target=_do, daemon=True).start()
 
     def restore_now():
         # admin only

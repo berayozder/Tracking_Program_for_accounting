@@ -72,7 +72,7 @@ data/*.sqlite
 data/*.db
 data/*.log
 
-# CSVs that are runtime generated (keep user-chosen inputs tracked if desired)
+# CSVs that are runtime generated
 # Ignore all CSVs in data
 data/*.csv
 

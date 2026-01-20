@@ -1,8 +1,8 @@
-from .connection import get_conn, get_cursor
+"""Supplier data access operations."""
+from __future__ import annotations
+
 from datetime import datetime
-
-
-# ---------------- SUPPLIER MANAGEMENT (DB-backed) ----------------
+from .connection import get_cursor
 
 def _ensure_suppliers_table():
     try:
@@ -19,7 +19,6 @@ def _ensure_suppliers_table():
                     created_date TEXT
                 )
             ''')
-            conn.commit()
     except Exception:
         pass
 
@@ -84,7 +83,6 @@ def write_suppliers(suppliers: list) -> None:
                     s.get('notes',''),
                     s.get('created_date',''),
                 ))
-            conn.commit()
     except Exception:
         pass
 
@@ -129,7 +127,6 @@ def add_supplier(name, email='', phone='', address='', payment_terms='', notes='
                 (notes or '').strip(),
                 created_date,
             ))
-            conn.commit()
         return supplier_id
     except Exception:
         return None
@@ -191,7 +188,6 @@ def edit_supplier(supplier_id, name=None, email=None, phone=None, address=None, 
         params = list(fields.values()) + [supplier_id]
         with get_cursor() as (conn, cur):
             cur.execute(f'UPDATE suppliers SET {set_clause} WHERE supplier_id = ?', params)
-            conn.commit()
             updated = cur.rowcount > 0
         return bool(updated)
     except Exception:
@@ -203,7 +199,6 @@ def delete_supplier(supplier_id):
         _ensure_suppliers_table()
         with get_cursor() as (conn, cur):
             cur.execute('DELETE FROM suppliers WHERE supplier_id = ?', (supplier_id,))
-            conn.commit()
             deleted = cur.rowcount > 0
         return bool(deleted)
     except Exception:

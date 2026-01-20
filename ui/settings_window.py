@@ -1,6 +1,8 @@
+from __future__ import annotations
 import tkinter as tk
 from tkinter import ttk, messagebox
-import db as db
+import db
+from .theme import apply_theme, maximize_window, themed_button
 
 
 def open_settings_window(root):
@@ -13,7 +15,6 @@ def open_settings_window(root):
         pass
 
     try:
-        from .theme import apply_theme, maximize_window
         apply_theme(win)
         maximize_window(win)
     except Exception:
@@ -83,7 +84,6 @@ def open_settings_window(root):
         except Exception as e:
             messagebox.showerror('Error', f'Failed to save settings: {e}')
 
-    from .theme import themed_button
     themed_button(btns, text='Save', variant='primary', command=on_save).pack(side='right')
     themed_button(btns, text='Cancel', variant='secondary', command=win.destroy).pack(side='right', padx=(0, 8))
 

@@ -1,6 +1,9 @@
-from .connection import get_conn, get_cursor
+"""Product code management and product ID generation."""
+from __future__ import annotations
+
 from datetime import datetime
 from typing import Optional
+from .connection import get_cursor
 
 def get_product_code(category, subcategory):
     with get_cursor() as (conn, cur):
@@ -43,7 +46,6 @@ def set_product_code(category, subcategory, cat_code, sub_code, next_serial=1):
             cur.execute('UPDATE product_codes SET cat_code=?, sub_code=?, next_serial=? WHERE id=?', (cat_code, sub_code, ns, row['id']))
         else:
             cur.execute('INSERT INTO product_codes (category, subcategory, cat_code, sub_code, next_serial) VALUES (?,?,?,?,?)', (category or '', subcategory or '', cat_code, sub_code, ns))
-        conn.commit()
 
 
 def get_cat_code_for_category(category: str) -> Optional[str]:
@@ -82,7 +84,6 @@ def generate_product_ids(category, subcategory, count, year_prefix=None):
         for i in range(start, start + c):
             ids.append(f"{yy}{cat_code}{sub_code}{str(i).zfill(4)}")
         cur.execute('UPDATE product_codes SET next_serial=? WHERE id=?', (start + c, row['id']))
-        conn.commit()
         return ids
 
 
@@ -104,10 +105,8 @@ def update_next_serial(category, subcategory, next_serial):
         cur.execute('UPDATE product_codes SET next_serial=? WHERE category=? AND subcategory=?', (ns, category or '', subcategory or ''))
         if cur.rowcount == 0:
             cur.execute('INSERT INTO product_codes (category, subcategory, cat_code, sub_code, next_serial) VALUES (?,?,?,?,?)', (category or '', subcategory or '', '000', '000', ns))
-        conn.commit()
 
 
 def delete_product_code(category, subcategory):
     with get_cursor() as (conn, cur):
         cur.execute('DELETE FROM product_codes WHERE category=? AND subcategory=?', (category or '', subcategory or ''))
-        conn.commit()

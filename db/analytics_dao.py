@@ -1,21 +1,28 @@
+"""Analytics and reporting data access operations."""
+from __future__ import annotations
+
 from .connection import get_cursor
-from typing import Dict
-from .settings import get_default_sale_currency,get_base_currency,get_default_import_currency
+from .settings import get_default_sale_currency, get_base_currency, get_default_import_currency
 from .rates import convert_amount
 
 
 def get_profit_analysis_by_sale(include_expenses: bool = False):
-    # Compute aggregated sale profit. For include_expenses=True we prefer the
-    # adjusted unit_cost stored in import_batches.unit_cost (payment-weighted).
-    # For include_expenses=False prefer the original import price stored in
-    # import_batches.unit_cost_orig (fallbacking to unit_cost_base/unit_cost).
+    """Calculate profit analysis for each sale with optional expense inclusion.
+    
+    Args:
+        include_expenses: If True, use payment-weighted unit costs (includes expenses).
+                         If False, use original import prices without expense allocation.
+    
+    Returns:
+        List of dicts with profit metrics per product sale, adjusted for returns.
+    """
+    # Select cost expression based on expense inclusion
     if not include_expenses:
-        # Non-inclusive: prefer original import price stored on batch, then fall back
-        # to base/unit_cost and finally any recorded allocation cost.
-        cost_expr = "COALESCE(ib.unit_cost_orig, ib.unit_cost_base, ib.unit_cost, NULLIF(sba.unit_cost,0), 0)"
+        # Use original import price (prefer base currency)
+        cost_expr = "COALESCE(ib.unit_cost_base, ib.unit_cost_orig, ib.unit_cost, NULLIF(sba.unit_cost,0), 0)"
     else:
-        # Inclusive: prefer adjusted batch unit_cost (payment-weighted), then fallbacks.
-        cost_expr = "COALESCE(ib.unit_cost, ib.unit_cost_base, ib.unit_cost_orig, NULLIF(sba.unit_cost,0), 0)"
+        # Use payment-weighted cost (includes allocated expenses, prefer base currency)
+        cost_expr = "COALESCE(ib.unit_cost_base, ib.unit_cost, ib.unit_cost_orig, NULLIF(sba.unit_cost,0), 0)"
     with get_cursor() as (conn, cur):
         cur.execute(f'''
                 SELECT 
@@ -40,13 +47,11 @@ def get_profit_analysis_by_sale(include_expenses: bool = False):
             ''')
         rows = [dict(r) for r in cur.fetchall()]
 
-    # Fetch detailed allocations using a fresh connection (avoid closed cursor)
-    # Use the same cost selection logic as the aggregate query so detailed
-    # allocation costs reflect the include_expenses flag consistently.
+    # Fetch detailed allocations for per-product calculations
     if not include_expenses:
-        cost_expr_alloc = "COALESCE(ib.unit_cost_orig, ib.unit_cost_base, ib.unit_cost, NULLIF(sba.unit_cost,0), 0)"
+        cost_expr_alloc = "COALESCE(ib.unit_cost_base, ib.unit_cost_orig, ib.unit_cost, NULLIF(sba.unit_cost,0), 0)"
     else:
-        cost_expr_alloc = "COALESCE(ib.unit_cost, ib.unit_cost_base, ib.unit_cost_orig, NULLIF(sba.unit_cost,0), 0)"
+        cost_expr_alloc = "COALESCE(ib.unit_cost_base, ib.unit_cost, ib.unit_cost_orig, NULLIF(sba.unit_cost,0), 0)"
     with get_cursor() as (conn_a, cur_a):
         cur_a.execute(f'''
             SELECT 
@@ -64,10 +69,10 @@ def get_profit_analysis_by_sale(include_expenses: bool = False):
             ORDER BY sba.sale_date DESC
         ''')
         allocs = [dict(r) for r in cur_a.fetchall()]
-    agg: Dict[str, Dict[str, float]] = {}
-    sale_date: Dict[str, str] = {}
-    category_map: Dict[str, str] = {}
-    subcategory_map: Dict[str, str] = {}
+    agg: dict[str, dict[str, float]] = {}
+    sale_date: dict[str, str] = {}
+    category_map: dict[str, str] = {}
+    subcategory_map: dict[str, str] = {}
     for a in allocs:
         pid = a['product_id']
         if not pid:
@@ -114,7 +119,8 @@ def get_profit_analysis_by_sale(include_expenses: bool = False):
                         row['batches_used'] = r['bc']
     except Exception:
         pass
-    # Apply returns adjustments so per-sale profit analysis reflects refunds/restocks
+    
+    # Apply returns adjustments to reflect refunds and restocks
     try:
         with get_cursor() as (conn3, cur3):
             cur3.execute("SELECT product_id, refund_amount, refund_currency, return_date, COALESCE(refund_amount_base,0) as refund_amount_base, COALESCE(restock,0) as restock FROM returns WHERE (deleted IS NULL OR deleted = 0)")
@@ -146,11 +152,11 @@ def get_profit_analysis_by_sale(include_expenses: bool = False):
                     restock_flag = 1 if int(rr['restock'] or 0) else 0
                     target = idx.get(pid)
                     if not target:
-                        # No aggregated sale for this product (maybe legacy CSV sale); skip
+                        # Product not found in sales data; skip
                         continue
-                    # Reduce revenue so reports reflect refund
+                    # Update metrics for this return
                     target['total_revenue'] = round(float(target.get('total_revenue', 0.0)) - float(refund_amt or 0.0), 2)
-                    # Decrease quantity by 1 (a returned unit)
+                    # Decrease quantity by 1
                     try:
                         orig_qty = float(target.get('total_quantity', 0.0))
                         target['total_quantity'] = orig_qty - 1.0
@@ -167,10 +173,7 @@ def get_profit_analysis_by_sale(include_expenses: bool = False):
                 except Exception:
                     current_profit = 0.0
                 if restock_flag:
-                    # For restocked returns, we want the net profit to decrease by one unit's profit
-                    # (per_unit_sale - per_unit_cost). To guarantee this, adjust revenue by
-                    # per_unit_sale and cost by per_unit_cost. Prefer precomputed per_unit fields
-                    # stored in `target`; otherwise compute from allocations.
+                    # Adjust profit for restocked return by removing one unit's profit
                     try:
                         per_unit_cost = float(target.get('per_unit_cost', 0.0))
                         per_unit_sale = float(target.get('per_unit_sale', 0.0))
@@ -179,7 +182,7 @@ def get_profit_analysis_by_sale(include_expenses: bool = False):
                         per_unit_sale = 0.0
 
                     if (not per_unit_cost or not per_unit_sale):
-                        # Fallback: derive per-unit sale and cost from allocations
+                        # Calculate per-unit values from allocations
                         try:
                             with get_cursor() as (conn_p, cur_p):
                                 cur_p.execute('''
@@ -203,16 +206,13 @@ def get_profit_analysis_by_sale(include_expenses: bool = False):
 
                     # Ensure revenue reflects per_unit_sale (we previously subtracted refund_amt)
                     try:
-                        # current total_revenue already had refund_amt subtracted earlier
-                        cur_rev = float(target.get('total_revenue', 0.0))
-                        # compute adjusted revenue as original_rev - per_unit_sale
-                        # so add back the earlier refund_amt and subtract per_unit_sale
+                        # Adjust revenue: add back refund_amt, subtract per_unit_sale
                         adj_rev = cur_rev + float(refund_amt or 0.0) - float(per_unit_sale or 0.0)
                         target['total_revenue'] = round(max(0.0, adj_rev), 2)
                     except Exception:
                         target['total_revenue'] = round(float(target.get('total_revenue', 0.0)), 2)
 
-                    # Reduce total_cost by per-unit cost (item returned to stock)
+                    # Reduce cost by per-unit amount (item restocked)
                     try:
                         target['total_cost'] = round(float(target.get('total_cost', 0.0)) - float(per_unit_cost or 0.0), 2)
                         if target['total_cost'] < 0:
@@ -220,7 +220,7 @@ def get_profit_analysis_by_sale(include_expenses: bool = False):
                     except Exception:
                         target['total_cost'] = 0.0
 
-                    # Recompute profit as revenue - cost; net effect = -per_unit_profit
+                    # Recalculate profit and margin
                     try:
                         tr = float(target.get('total_revenue', 0.0))
                         tc = float(target.get('total_cost', 0.0))
@@ -243,7 +243,7 @@ def get_profit_analysis_by_sale(include_expenses: bool = False):
                     except Exception:
                         target['total_revenue'] = 0.0
 
-                    # Recalculate profit (no cost adjustment since item not restocked)
+                    # Recalculate profit (cost unchanged for non-restocked items)
                     tr = float(target.get('total_revenue', 0.0))
                     tc = float(target.get('total_cost', 0.0))
                     target['total_profit'] = round(tr - tc, 2)
@@ -299,7 +299,7 @@ def get_monthly_sales_profit(year: int):
             'gross_profit': float(r['gross_profit'] or 0.0),
             'items_sold': float(r['items_sold'] or 0.0),
         }
-    # Apply returns adjustments (prefer DB table, fallback to CSV)
+    # Apply returns adjustments from database
     try:
         with get_cursor() as (conn2, cur2):
             cur2.execute("SELECT COUNT(1) AS c FROM returns WHERE (deleted IS NULL OR deleted = 0)")
@@ -420,7 +420,7 @@ def get_yearly_sales_profit():
         'gross_profit': float(r['gross_profit'] or 0.0),
         'items_sold': float(r['items_sold'] or 0.0),
     } for r in rows}
-    # Apply returns adjustments (prefer DB table, fallback to CSV)
+    # Apply returns adjustments from database
     try:
         with get_cursor() as (conn2, cur2):
             cur2.execute("SELECT COUNT(1) AS c FROM returns")
@@ -467,7 +467,7 @@ def get_yearly_sales_profit():
         except Exception:
             pass
     else:
-        # No legacy CSV fallback: if returns table is empty we simply return the base_res as-is.
+        # No returns data; return base results as-is
         pass
     for y, v in base_res.items():
         v['gross_profit'] = float(v.get('revenue', 0.0)) - float(v.get('cogs', 0.0))
@@ -496,13 +496,13 @@ def get_yearly_expenses():
         except Exception:
             val = amt if from_ccy == base else 0.0
         totals[y] = totals.get(y, 0.0) + float(val or 0.0)
-    # DB-only: returns aggregated above; legacy CSV fallback removed.
+    # Returns aggregated from database only
     return totals
 
 
 def get_yearly_return_impact():
     out = {}
-    # Prefer DB table
+    # Query returns from database
     try:
         with get_cursor() as (conn2, cur2):
             cur2.execute("SELECT COUNT(1) AS c FROM returns")
@@ -548,10 +548,7 @@ def get_yearly_return_impact():
         except Exception:
             return out
         return out
-    # DB-only: do not attempt to read legacy CSV files for returns.
-    # The `out` value above is built using the `returns` table; if DB access
-    # failed earlier, we return the (possibly-empty) `out` value. This avoids
-    # any runtime dependency on legacy CSV files.
+    # Returns are read from database only
     return out
 
 

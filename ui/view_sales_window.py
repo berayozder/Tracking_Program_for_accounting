@@ -1,3 +1,4 @@
+from __future__ import annotations
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog, simpledialog
 from pathlib import Path
@@ -212,7 +213,7 @@ def open_view_sales_window(root: tk.Tk):
         return False
 
     def row_matches_returned(r: Dict, return_filter: str, returned_ids: Set[str]) -> bool:
-        pid = (r.get('ProductID') or '').strip()
+        pid = str(r.get('ProductID') or '').strip()
         if return_filter == 'All':
             return True
         elif return_filter == 'Returned':
@@ -264,7 +265,7 @@ def open_view_sales_window(root: tk.Tk):
         returned_ids = set()
         try:
             for rr in read_returns():
-                pid = (rr.get('ProductID') or '').strip()
+                pid = str(rr.get('ProductID') or '').strip()
                 if pid:
                     returned_ids.add(pid)
         except Exception:
@@ -273,7 +274,7 @@ def open_view_sales_window(root: tk.Tk):
         return_filter = return_var.get()
         
         for idx, r in enumerate(all_rows):
-            is_returned = (r.get('ProductID') or '').strip() in returned_ids
+            is_returned = str(r.get('ProductID') or '').strip() in returned_ids
             
             if (row_matches_year(r, yy) and 
                 row_matches_search(r, q) and 
@@ -457,7 +458,6 @@ def open_view_sales_window(root: tk.Tk):
             return
 
         try:
-            import db as db
             any_done = False
             if choice is False:
                 # Soft-delete all at once
@@ -513,7 +513,6 @@ def open_view_sales_window(root: tk.Tk):
             messagebox.showwarning('Select', 'Select a row first')
             return
         try:
-            import db as db
             rows = [ _normalize_row_for_ui(r) for r in db.list_sales(include_deleted=True) ]
             rec = next((r for r in rows if r.get('id') == idx), None)
         except Exception:
@@ -522,10 +521,7 @@ def open_view_sales_window(root: tk.Tk):
             messagebox.showerror('Error', 'Invalid selection or sale not found')
             return
         # Debug: print selection and record info
-        try:
-            print(f"[DEBUG] do_mark_returned selected id={idx} product_id={rec.get('product_id') or rec.get('ProductID')}")
-        except Exception:
-            pass
+
         # Helper to read either DB-style (snake_case) or UI-style (TitleCase) keys
         def _pick(*keys):
             for k in keys:
@@ -538,11 +534,8 @@ def open_view_sales_window(root: tk.Tk):
             return ''
 
         # Prevent duplicate returns for same product id
-        existing = { (r.get('ProductID') or '').strip() for r in read_returns() }
-        try:
-            print(f"[DEBUG] existing returns PIDs count={len(existing)} sample={list(existing)[:5]}")
-        except Exception:
-            pass
+        existing = { str(r.get('ProductID') or '').strip() for r in read_returns() }
+
         pid = _pick('product_id', 'ProductID')
         if pid in existing:
             if not messagebox.askyesno('Already returned', 'This Product ID already has a return recorded. Record another return anyway?'):
@@ -573,7 +566,6 @@ def open_view_sales_window(root: tk.Tk):
         reason_frame.pack(pady=2)
         # Load suggestions: distinct reasons from DB plus common defaults
         try:
-            import db as db
             db_reasons = db.get_distinct_return_reasons() or []
         except Exception:
             db_reasons = []
@@ -607,13 +599,12 @@ def open_view_sales_window(root: tk.Tk):
             val = reason_var.get().strip()
             if val and val not in suggestions:
                 try:
-                    import db as db
                     db.add_return_reason(val)
                     suggestions.append(val)
                     reason_combo['values'] = suggestions
-                    tk.messagebox.showinfo('Added', f'"{val}" added to Reason presets.')
+                    messagebox.showinfo('Added', f'"{val}" added to Reason presets.')
                 except Exception:
-                    tk.messagebox.showerror('Error', 'Could not add reason to presets.')
+                    messagebox.showerror('Error', 'Could not add reason to presets.')
 
         add_btn = ttk.Button(reason_frame, text='+ Add to defaults', command=add_reason_to_defaults)
         add_btn.pack(side=tk.LEFT, padx=6)
@@ -627,9 +618,8 @@ def open_view_sales_window(root: tk.Tk):
             path = filedialog.askopenfilename(parent=dlg, title='Select document')
             if path:
                 try:
-                    from pathlib import Path as _P
                     doc_entry.delete(0, tk.END)
-                    doc_entry.insert(0, str(_P(path).resolve()))
+                    doc_entry.insert(0, str(Path(path).resolve()))
                 except Exception:
                     doc_entry.delete(0, tk.END)
                     doc_entry.insert(0, path)
@@ -659,7 +649,6 @@ def open_view_sales_window(root: tk.Tk):
                         restock_final = 0
 
                 # Write return directly into DB using normalized keys (support both DB and UI row shapes)
-                import db as db
                 # Use SaleCurrency for refund currency; fallback to default if missing
                 refund_ccy = _pick('sale_currency', 'SaleCurrency') or ''
                 if not refund_ccy:
@@ -685,15 +674,9 @@ def open_view_sales_window(root: tk.Tk):
                     'doc_paths': doc_entry.get().strip(),
                     'sale_id': rec.get('id'),
                 }
-                try:
-                    print(f"[DEBUG] inserting return payload product_id={payload.get('product_id')} refund={payload.get('refund_amount')}")
-                except Exception:
-                    pass
+
                 res = db.insert_return(payload)
-                try:
-                    print(f"[DEBUG] insert_return result={res}")
-                except Exception:
-                    pass
+
                 # Show batch restock confirmation if insert_return returned restocked details
                 try:
                     if res and isinstance(res, dict) and res.get('restocked_batches'):
@@ -727,7 +710,6 @@ def open_view_sales_window(root: tk.Tk):
             messagebox.showwarning('Select', 'Select a row first')
             return
         try:
-            import db as db
             rows = [ _normalize_row_for_ui(r) for r in db.list_sales(include_deleted=True) ]
             rec = next((r for r in rows if r.get('id') == idx), None)
         except Exception:
@@ -737,10 +719,10 @@ def open_view_sales_window(root: tk.Tk):
             return
         # Prevent editing core sale if returned
         try:
-            returned = { (r.get('ProductID') or '').strip() for r in read_returns() }
+            returned = { str(r.get('ProductID') or '').strip() for r in read_returns() }
         except Exception:
             returned = set()
-        pid = (rec.get('ProductID') or '').strip()
+        pid = str(rec.get('ProductID') or '').strip()
         if pid in returned:
             messagebox.showinfo('Not allowed', 'This sale has a recorded return and cannot be edited. You can delete the return first if needed.')
             return
@@ -785,8 +767,7 @@ def open_view_sales_window(root: tk.Tk):
             if path:
                 try:
                     doc_entry.delete(0, tk.END)
-                    from pathlib import Path as _P
-                    doc_entry.insert(0, str(_P(path).resolve()))
+                    doc_entry.insert(0, str(Path(path).resolve()))
                 except Exception:
                     doc_entry.delete(0, tk.END)
                     doc_entry.insert(0, path)
@@ -864,8 +845,6 @@ def open_view_sales_window(root: tk.Tk):
 
     # Action buttons with improved hierarchy
     btn_frame = ttk.Frame(main_container)
-    year_combo.bind('<<ComboboxSelected>>', on_year_change)
-    search_entry.bind('<KeyRelease>', on_search_change)
     
     # Primary actions (left side)
     primary_frame = ttk.Frame(btn_frame)
@@ -892,7 +871,7 @@ def open_view_sales_window(root: tk.Tk):
         if not rec:
             messagebox.showerror('Error', 'Invalid selection index', parent=win)
             return
-        product_id = (rec.get('ProductID') or '').strip()
+        product_id = str(rec.get('ProductID') or '').strip()
         docs = parse_docs(rec.get('DocumentPath', ''))
 
         dlg = tk.Toplevel(win)
@@ -1028,7 +1007,7 @@ def open_view_sales_window(root: tk.Tk):
         if not rec:
             messagebox.showerror('Error', 'Invalid selection or sale not found')
             return
-        product_id = (rec.get('product_id') or rec.get('ProductID') or '').strip()
+        product_id = str(rec.get('product_id') or rec.get('ProductID') or '').strip()
         if not product_id:
             messagebox.showwarning('No Product ID', 'This sale has no Product ID')
             return
@@ -1123,6 +1102,9 @@ def open_view_sales_window(root: tk.Tk):
         # Close button
         themed_button(container, text='Close', variant='secondary', command=dlg.destroy).pack(pady=(12, 0))
 
+    def do_export_csv():
+        _export_csv(tree, cols)
+
     themed_button(secondary_frame, text='📊 Batch Info', variant='secondary',
               command=do_view_batch_info).pack(side=tk.LEFT, padx=4)
     themed_button(secondary_frame, text='📄 Documents', variant='secondary',
@@ -1170,7 +1152,6 @@ def open_view_sales_window(root: tk.Tk):
     btn_frame.pack(fill='x', pady=8)
 
     # Bind filters after buttons defined
-    return_combo.bind('<<ComboboxSelected>>', on_return_change)
 
     # Listen for <<ReturnUndone>> event to refresh sales view when a return is undone
     def on_return_undone(event=None):

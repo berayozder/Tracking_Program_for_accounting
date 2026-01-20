@@ -1,5 +1,8 @@
+"""Expense tracking and management."""
+from __future__ import annotations
+
 import logging
-from typing import Optional, List, Dict, Any, Union
+from typing import Optional, Any, Union
 
 from .connection import get_cursor
 from .audit import write_audit
@@ -12,9 +15,9 @@ from core.vat_utils import compute_vat
 logger = logging.getLogger(__name__)
 
 
-def _parse_import_ids(import_ids: Optional[List[Any]], single_import_id: Optional[Any]) -> tuple[List[int], Optional[int]]:
+def _parse_import_ids(import_ids: Optional[list[Any]], single_import_id: Optional[Any]) -> tuple[list[int], Optional[int]]:
     """Helper to parse and deduplicate import IDs."""
-    ids: List[int] = []
+    ids: list[int] = []
     if import_ids:
         for v in import_ids:
             try:
@@ -44,7 +47,7 @@ def add_expense(
     category: Optional[str] = None,
     notes: Optional[str] = None,
     document_path: Optional[str] = None,
-    import_ids: Optional[List[Any]] = None,
+    import_ids: Optional[list[Any]] = None,
     currency: Optional[str] = None,
     vat_rate: float = 20.0,
     vat_inclusive: bool = True,
@@ -143,7 +146,7 @@ def add_expense(
     return expense_id
 
 
-def get_expenses(limit: int = 500, offset: int = 0) -> List[Dict[str, Any]]:
+def get_expenses(limit: int = 500, offset: int = 0) -> list[dict[str, Any]]:
     """
     Fetch duplicate-free list of expenses with pagination.
     
@@ -193,7 +196,7 @@ def edit_expense(
     category: Optional[str] = None,
     notes: Optional[str] = None,
     document_path: Optional[str] = None,
-    import_ids: Optional[List[Any]] = None,
+    import_ids: Optional[list[Any]] = None,
     currency: Optional[str] = None,
     vat_rate: float = 20.0,
     vat_inclusive: bool = True
@@ -248,7 +251,7 @@ def edit_expense(
         pass
 
 
-def get_expense_import_links(expense_id: int) -> List[int]:
+def get_expense_import_links(expense_id: int) -> list[int]:
     """Get list of import IDs linked to an expense."""
     with get_cursor() as (conn, cur):
         cur.execute(

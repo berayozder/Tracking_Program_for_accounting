@@ -26,7 +26,7 @@ def get_or_fetch_rate(date_str: str | None) -> Optional[float]:
         cached = None
     # Try DB cache next for centralized/shared cache
     try:
-        import db as db
+        import db
         cached_db = db.get_cached_rate(date_str, 'USD', 'TRY')
         if cached_db and float(cached_db) > 0:
             # populate in-memory cache for faster subsequent lookups
@@ -55,11 +55,11 @@ def get_or_fetch_rate(date_str: str | None) -> Optional[float]:
                     pass
                 # Also persist into DB cache if available (backward compatible)
                 try:
-                    import db as db
+                    import db
                     db.set_cached_rate(date_str, 'USD', 'TRY', fv)
                 except Exception:
                     pass
                 return fv
     except Exception:
-        return None
+        pass
     return None

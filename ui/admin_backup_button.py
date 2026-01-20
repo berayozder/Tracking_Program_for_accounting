@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import messagebox
+from tkinter import messagebox, ttk
 from datetime import datetime
 from pathlib import Path
 import threading
@@ -40,9 +40,10 @@ def backup_now_callback(parent):
     threading.Thread(target=do_backup, daemon=True).start()
 
 
-def add_backup_button_to_frame(frame, parent):
-    # Use ttk.Button or themed_button for consistent appearance
-    from .theme import themed_button
+from .theme import themed_button
+
+def add_backup_button_to_frame(frame: tk.Widget, parent: tk.Tk) -> ttk.Button:
+    # Use themed_button for consistent appearance
     row = frame.grid_size()[1]
     btn = themed_button(frame, text='🗄️ One-Click Data Backup', variant='primary', command=lambda: backup_now_callback(parent))
     btn.grid(row=row, column=0, columnspan=2, sticky='ew', pady=8, padx=0)

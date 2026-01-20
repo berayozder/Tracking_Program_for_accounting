@@ -1,13 +1,14 @@
+from __future__ import annotations
 import tkinter as tk
-from tkinter import ttk, messagebox
-import db as db
+from tkinter import ttk, messagebox, filedialog
+import csv
+import db
 from .theme import stripe_treeview, apply_theme, maximize_window, themed_button
 
 
 def open_suppliers_window(root):
-    import csv
     def do_export_csv():
-        file_path = tk.filedialog.asksaveasfilename(
+        file_path = filedialog.asksaveasfilename(
             defaultextension='.csv',
             filetypes=[('CSV files', '*.csv'), ('All files', '*.*')],
             title='Export Suppliers to CSV'

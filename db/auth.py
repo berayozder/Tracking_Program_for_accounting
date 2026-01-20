@@ -1,11 +1,14 @@
-from .connection import get_conn, get_cursor
+"""User authentication and authorization functionality."""
+from __future__ import annotations
+
 import os
 import hashlib
 import hmac
-from typing import Optional, Dict, Any
+from typing import Optional
+from .connection import get_cursor
 
 # ------------------------ SECURITY: USERS & AUTH ------------------------
-_CURRENT_USER: Dict[str, Optional[str]] = {"username": None, "role": None}
+_CURRENT_USER: dict[str, Optional[str]] = {"username": None, "role": None}
 
 
 def _pbkdf2_hash(password: str, salt: bytes, iterations: int = 120_000) -> bytes:
@@ -70,7 +73,7 @@ def set_current_user(username: Optional[str], role: Optional[str]):
     _CURRENT_USER['role'] = role
 
 
-def get_current_user() -> Dict[str, Optional[str]]:
+def get_current_user() -> dict[str, Optional[str]]:
     return {"username": _CURRENT_USER.get('username'), "role": _CURRENT_USER.get('role')}
 
 

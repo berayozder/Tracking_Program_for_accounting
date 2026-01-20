@@ -1,8 +1,10 @@
+"""Returns management and inventory restocking."""
+from __future__ import annotations
 
 import logging
 import json
 import traceback
-from typing import Any, Dict, Optional, List
+from typing import Any, Optional
 
 from db.connection import get_cursor
 from db.settings import get_base_currency, get_default_sale_currency
@@ -54,7 +56,7 @@ def _compute_refund_base(return_date: str, refund_amount: float, refund_currency
     except Exception:
         return float(refund_amount or 0.0) if (refund_currency or base).upper() == base else 0.0
 
-def _apply_restock_logic(cur, product_id: str, category: str, subcategory: str, direction: int) -> List[Dict]:
+def _apply_restock_logic(cur, product_id: str, category: str, subcategory: str, direction: int) -> list[dict]:
     """
     Apply restock (+1) or unstock (-1) logic to batches and global inventory.
     Returns list of affected batches.
@@ -156,7 +158,7 @@ def _process_restock_change_internal(cur, ret_id, restock):
         return True
     return False
 
-def list_returns() -> List[Dict[str, Any]]:
+def list_returns() -> list[dict[str, Any]]:
     """Return all non-deleted returns with refund amounts in base currency."""
     with get_cursor() as (conn, cur):
         cur.execute('''
@@ -169,10 +171,14 @@ def list_returns() -> List[Dict[str, Any]]:
         ''')
         return [dict(row) for row in cur.fetchall()]
 
-def insert_return(fields: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def insert_return(fields: dict[str, Any]) -> Optional[dict[str, Any]]:
     """Insert a return, compute refund_amount_base, optionally restock inventory."""
     rd = str(fields.get('return_date') or fields.get('ReturnDate') or '').strip()
-    pid = str(fields.get('product_id') or fields.get('ProductID') or '').strip()
+    pid = fields.get('product_id') or fields.get('ProductID') or ''
+    if pid is None: pid = ''
+    # pid can be int or str. If it's pure int, leave as int. If str, strip.
+    if isinstance(pid, str): pid = pid.strip()
+    
     sale_date = str(fields.get('sale_date') or fields.get('SaleDate') or '').strip()
     category = str(fields.get('category') or fields.get('Category') or '').strip()
     subcategory = str(fields.get('subcategory') or fields.get('Subcategory') or '').strip()
@@ -209,7 +215,7 @@ def insert_return(fields: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
         return {'id': new_id, 'restocked_batches': returned_batches}
 
-def update_return(ret_id: int, fields: Dict[str, Any]) -> bool:
+def update_return(ret_id: int, fields: dict[str, Any]) -> bool:
     """Update a return and recompute refund_amount_base if needed."""
     with get_cursor() as (conn, cur):
         cur.execute('SELECT * FROM returns WHERE id = ?', (ret_id,))
@@ -289,7 +295,7 @@ def undelete_return(ret_id: int) -> bool:
         cur.execute('UPDATE returns SET deleted = 0 WHERE id = ?', (ret_id,))
         return True
 
-def get_distinct_return_reasons(limit: int = 200) -> List[str]:
+def get_distinct_return_reasons(limit: int = 200) -> list[str]:
     """Return distinct non-empty reasons from returns."""
     with get_cursor() as (conn, cur):
         cur.execute("""

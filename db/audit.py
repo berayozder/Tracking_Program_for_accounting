@@ -1,6 +1,9 @@
+"""Audit logging functionality for tracking user actions."""
+from __future__ import annotations
+
 import logging
-from typing import List, Optional, Dict
-from .connection import get_conn,get_cursor
+from typing import Optional
+from .connection import get_cursor
 from .auth import _CURRENT_USER
 
 # Configure logging for this module
@@ -42,7 +45,7 @@ def get_audit_logs(
     entity: Optional[str] = None,
     q: Optional[str] = None,
     limit: int = 1000,
-) -> List[Dict]:
+) -> list[dict]:
     """
     Fetch audit logs with optional filtering.
 
@@ -56,7 +59,7 @@ def get_audit_logs(
         limit (int): Max number of records to return.
 
     Returns:
-        List[Dict]: List of audit log entries as dictionaries.
+        list[dict]: List of audit log entries as dictionaries.
     """
     where = []
     params = []
@@ -98,7 +101,7 @@ def get_audit_logs(
         return []
 
 
-def get_audit_distinct(field: str) -> List[str]:
+def get_audit_distinct(field: str) -> list[str]:
     """
     Get distinct values for a field in the audit log.
 
@@ -106,7 +109,7 @@ def get_audit_distinct(field: str) -> List[str]:
         field (str): Must be one of 'user', 'action', 'entity'.
 
     Returns:
-        List[str]: List of distinct values.
+        list[str]: List of distinct values.
     """
     allowed_fields = {"user", "action", "entity"}
     if field not in allowed_fields:

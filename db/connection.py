@@ -1,4 +1,5 @@
 """connection.py - sqlite3 connection and initialization."""
+from __future__ import annotations
 
 from pathlib import Path
 import sqlite3
@@ -23,16 +24,21 @@ def get_conn() -> sqlite3.Connection:
     conn.execute('PRAGMA foreign_keys = ON;')
     return conn
 
+
 def init_db() -> sqlite3.Connection:
     """Initialize DB schema if missing and return sqlite3.Connection."""
     conn = get_conn()
     init_db_schema(conn)
     return conn
 
+
 @contextmanager
 def get_cursor():
-    conn = sqlite3.connect(DB_PATH)
+    """Context manager that yields (conn, cursor) with automatic commit/rollback."""
+    ensure_data_dir()
+    conn = sqlite3.connect(str(DB_PATH))
     conn.row_factory = sqlite3.Row
+    conn.execute('PRAGMA foreign_keys = ON;')
     cur = conn.cursor()
     try:
         yield conn, cur

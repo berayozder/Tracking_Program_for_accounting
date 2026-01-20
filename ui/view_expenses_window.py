@@ -1,17 +1,18 @@
+from __future__ import annotations
 import tkinter as tk
-from tkinter import ttk, messagebox, filedialog
+from tkinter import ttk, messagebox, filedialog, simpledialog
 from datetime import datetime
-import db as db
-from tkinter import simpledialog
+import db
 from .theme import stripe_treeview, maximize_window, apply_theme, themed_button
 import os
 import json
 import sys
 import subprocess
+import csv
+from pathlib import Path
 
 
 def open_view_expenses_window(root):
-    import csv
     def do_export_csv():
         file_path = filedialog.asksaveasfilename(
             defaultextension='.csv',
@@ -110,9 +111,8 @@ def open_view_expenses_window(root):
     def _coerce_for_sort(col_name, value):
         v = '' if value is None else str(value)
         if col_name.lower().endswith('date') or col_name.lower() in ('date',):
-            from datetime import datetime as _dt
             try:
-                return _dt.strptime(v, '%Y-%m-%d')
+                return datetime.strptime(v, '%Y-%m-%d')
             except Exception:
                 pass
         try:
@@ -406,10 +406,9 @@ def open_view_expenses_window(root):
             paths = filedialog.askopenfilenames(parent=f, title='Select document(s)')
             if not paths:
                 return
-            from pathlib import Path as _P
             for p in paths:
                 try:
-                    rp = str(_P(p).resolve())
+                    rp = str(Path(p).resolve())
                 except Exception:
                     rp = str(p)
                 if rp and rp not in doc_list:
@@ -687,8 +686,7 @@ def open_view_expenses_window(root):
         if not p:
             messagebox.showwarning('No document', 'No document path set for this row.', parent=window)
             return
-        from pathlib import Path as _P
-        pp = _P(p).expanduser()
+        pp = Path(p).expanduser()
         if not pp.exists():
             messagebox.showerror('Not found', f'File not found:\n{pp}', parent=window)
             return
@@ -733,10 +731,9 @@ def open_view_expenses_window(root):
             paths = filedialog.askopenfilenames(parent=dlg, title='Select document(s)')
             if not paths:
                 return
-            from pathlib import Path as _P
             for p in paths:
                 try:
-                    rp = str(_P(p).resolve())
+                    rp = str(Path(p).resolve())
                 except Exception:
                     rp = str(p)
                 if rp and rp not in docs:

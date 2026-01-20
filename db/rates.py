@@ -1,10 +1,17 @@
+"""Currency conversion and FX rate caching functionality."""
+from __future__ import annotations
+
+from typing import Optional
 from .connection import get_cursor
 from .settings import get_base_currency
-from typing import Optional
 
-# ---------------- Currency conversion & FX cache ----------------
 
 def _get_rate_generic(date_str: str, from_ccy: str, to_ccy: str) -> Optional[float]:
+    """
+    Get exchange rate between two currencies for a specific date.
+    
+    Tries cache first, then core.fx_rates for USD/TRY, then Frankfurter API as fallback.
+    """
     from_ccy = (from_ccy or '').upper()
     to_ccy = (to_ccy or '').upper()
     if not from_ccy or not to_ccy:
@@ -48,11 +55,12 @@ def _get_rate_generic(date_str: str, from_ccy: str, to_ccy: str) -> Optional[flo
             except Exception:
                 continue
     except Exception:
-        return None
+        pass
     return None
 
 
 def convert_amount(date_str: str, amount: float, from_ccy: str, to_ccy: str) -> Optional[float]:
+    """Convert an amount from one currency to another using the rate for a specific date."""
     try:
         rate = _get_rate_generic(date_str, from_ccy, to_ccy)
         if rate is None or rate <= 0:
@@ -63,6 +71,7 @@ def convert_amount(date_str: str, amount: float, from_ccy: str, to_ccy: str) -> 
 
 
 def get_cached_rate(date_str: str, from_ccy: str, to_ccy: str) -> Optional[float]:
+    """Retrieve a cached exchange rate from the database."""
     try:
         with get_cursor() as (conn, cur):
             cur.execute('SELECT rate FROM fx_cache WHERE date=? AND from_ccy=? AND to_ccy=?',
@@ -79,16 +88,17 @@ def get_cached_rate(date_str: str, from_ccy: str, to_ccy: str) -> Optional[float
 
 
 def set_cached_rate(date_str: str, from_ccy: str, to_ccy: str, rate: float) -> None:
+    """Store an exchange rate in the database cache."""
     try:
         with get_cursor() as (conn, cur):
             cur.execute('INSERT OR REPLACE INTO fx_cache(date, from_ccy, to_ccy, rate) VALUES (?,?,?,?)',
                         (date_str, (from_ccy or '').upper(), (to_ccy or '').upper(), float(rate)))
-            conn.commit()
     except Exception:
         pass
 
 
 def get_rate_to_base(date_str: str, from_ccy: str) -> Optional[float]:
+    """Get the exchange rate from a currency to the base currency."""
     base = get_base_currency()
     from_ccy_u = (from_ccy or '').upper()
     base_u = (base or '').upper()

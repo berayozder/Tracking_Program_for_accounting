@@ -1,12 +1,13 @@
+from __future__ import annotations
 import tkinter as tk
-from tkinter import ttk, messagebox
-import db as db
-from .theme import stripe_treeview, maximize_window, themed_button
+from tkinter import ttk, messagebox, filedialog
+import csv
+import db
+from .theme import stripe_treeview, maximize_window, themed_button, apply_theme
 
 def open_customers_window(root):
-    import csv
     def do_export_csv():
-        file_path = tk.filedialog.asksaveasfilename(
+        file_path = filedialog.asksaveasfilename(
             defaultextension='.csv',
             filetypes=[('CSV files', '*.csv'), ('All files', '*.*')],
             title='Export Customers to CSV'
@@ -23,9 +24,9 @@ def open_customers_window(root):
                 writer = csv.writer(f)
                 writer.writerow(columns)
                 writer.writerows(data)
-            tk.messagebox.showinfo('Exported', f'Customers exported to {file_path}')
+            messagebox.showinfo('Exported', f'Customers exported to {file_path}')
         except Exception as e:
-            tk.messagebox.showerror('Error', f'Failed to export CSV: {e}')
+            messagebox.showerror('Error', f'Failed to export CSV: {e}')
     """
     Customer Management Window
     Shows all customers with their details and allows editing contact information
@@ -40,7 +41,6 @@ def open_customers_window(root):
     win.minsize(800, 500)
     
     # Apply theme to window
-    from .theme import apply_theme
     apply_theme(win)
     
     # Main container with padding

@@ -1,6 +1,8 @@
+from __future__ import annotations
 import tkinter as tk
+from datetime import datetime
 from tkinter import ttk, messagebox, simpledialog
-import db as db
+import db
 from .theme import stripe_treeview, maximize_window, themed_button, make_treeview_sortable, export_treeview_csv, apply_theme
 
 
@@ -64,9 +66,8 @@ def open_view_imports_window(root):
     def _coerce_for_sort(col_name, value):
         v = '' if value is None else str(value)
         if col_name.lower().endswith('date') or col_name.lower() in ('date',):
-            from datetime import datetime as _dt
             try:
-                return _dt.strptime(v, '%Y-%m-%d')
+                return datetime.strptime(v, '%Y-%m-%d')
             except Exception:
                 pass
         try:

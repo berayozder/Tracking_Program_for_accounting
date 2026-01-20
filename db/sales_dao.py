@@ -1,13 +1,16 @@
-import logging
-from typing import List, Dict, Any, Optional, Union
+"""Sales data access and management."""
+from __future__ import annotations
 
-from .connection import get_conn, get_cursor
+import logging
+from typing import Optional, Any, Union
+
+from .connection import get_cursor
 from .utils import float_or_none
 
 logger = logging.getLogger(__name__)
 
 
-def list_sales(include_deleted: bool = False) -> List[Dict[str, Any]]:
+def list_sales(include_deleted: bool = False) -> list[dict[str, Any]]:
     """
     Return sales rows as list of dicts ordered by date ascending (oldest first).
     
@@ -36,7 +39,7 @@ def list_sales(include_deleted: bool = False) -> List[Dict[str, Any]]:
         return []
 
 
-def add_sale(row: Dict[str, Any]) -> int:
+def add_sale(row: dict[str, Any]) -> int:
     """
     Insert a sale into the sales table.
     
@@ -76,7 +79,7 @@ def add_sale(row: Dict[str, Any]) -> int:
                     float_or_none(r.get('sellingprice') or r.get('selling_price') or r.get('unit_price')) or 0,
                     r.get('platform', ''),
                     r.get('productid') or r.get('product_id') or '',
-                    r.get('customerid') or r.get('customer_id') or '',
+                    r.get('customerid') or r.get('customer_id'),
                     r.get('documentpath') or r.get('document_path') or r.get('doc_paths') or '',
                     float_or_none(r.get('fxtobase') or r.get('fx_to_base')),
                     float_or_none(r.get('sellingpricebase') or r.get('selling_price_base') or r.get('sellingpriceusd')),
@@ -87,14 +90,13 @@ def add_sale(row: Dict[str, Any]) -> int:
                     deleted_val
                 )
             )
-            conn.commit()
             return cur.lastrowid or 0
     except Exception as e:
         logger.error(f"Error in add_sale: {e}")
         return 0
 
 
-def overwrite_sales(rows: List[Dict[str, Any]]) -> int:
+def overwrite_sales(rows: list[dict[str, Any]]) -> int:
     """
     Replace all sales rows with provided rows.
     
@@ -128,7 +130,7 @@ def overwrite_sales(rows: List[Dict[str, Any]]) -> int:
                         float_or_none(rr.get('sellingprice') or rr.get('selling_price') or rr.get('unit_price')) or 0,
                         rr.get('platform', ''),
                         rr.get('productid') or rr.get('product_id') or '',
-                        rr.get('customerid') or rr.get('customer_id') or '',
+                        rr.get('customerid') or rr.get('customer_id'),
                         rr.get('documentpath') or rr.get('document_path') or rr.get('doc_paths') or '',
                         float_or_none(rr.get('fxtobase') or rr.get('fx_to_base')),
                         float_or_none(rr.get('sellingpricebase') or rr.get('selling_price_base') or rr.get('sellingpriceusd')),
@@ -137,14 +139,13 @@ def overwrite_sales(rows: List[Dict[str, Any]]) -> int:
                     )
                 )
                 count += 1
-            conn.commit()
             return count
     except Exception as e:
         logger.error(f"Error in overwrite_sales: {e}")
         return 0
 
 
-def get_distinct_sale_platforms() -> List[str]:
+def get_distinct_sale_platforms() -> list[str]:
     """Return list of distinct, non-empty platform names from sales."""
     try:
         with get_cursor() as (conn, cur):
@@ -159,7 +160,7 @@ def get_distinct_sale_platforms() -> List[str]:
         return []
 
 
-def undelete_sales_by_indices(indices: List[int]) -> int:
+def undelete_sales_by_indices(indices: list[int]) -> int:
     """
     Clear Deleted flag for rows specified by zero-based indices in the full sales list.
     
@@ -180,14 +181,13 @@ def undelete_sales_by_indices(indices: List[int]) -> int:
         with get_cursor() as (conn, cur):
             q = f"UPDATE sales SET deleted=0 WHERE id IN ({','.join(['?']*len(ids))})"
             cur.execute(q, tuple(ids))
-            conn.commit()
             return cur.rowcount or 0
     except Exception as e:
         logger.error(f"Error in undelete_sales_by_indices: {e}")
         return 0
 
 
-def undelete_sales_by_ids(ids: List[int]) -> int:
+def undelete_sales_by_ids(ids: list[int]) -> int:
     """
     Clear Deleted flag for sales specified by their DB ids.
     
@@ -203,14 +203,13 @@ def undelete_sales_by_ids(ids: List[int]) -> int:
         with get_cursor() as (conn, cur):
             q = f"UPDATE sales SET deleted=0 WHERE id IN ({','.join(['?']*len(ids))})"
             cur.execute(q, tuple(ids))
-            conn.commit()
             return cur.rowcount or 0
     except Exception as e:
         logger.error(f"Error in undelete_sales_by_ids: {e}")
         return 0
 
 
-def mark_sale_deleted(ids: List[int]) -> int:
+def mark_sale_deleted(ids: list[int]) -> int:
     """
     Mark given sale ids as deleted (soft-delete).
     
@@ -226,14 +225,13 @@ def mark_sale_deleted(ids: List[int]) -> int:
         with get_cursor() as (conn, cur):
             q = f"UPDATE sales SET deleted=1 WHERE id IN ({','.join(['?']*len(ids))})"
             cur.execute(q, tuple(ids))
-            conn.commit()
             return cur.rowcount or 0
     except Exception as e:
         logger.error(f"Error in mark_sale_deleted: {e}")
         return 0
 
 
-def update_sale(sale_id: int, changes: Dict[str, Any]) -> bool:
+def update_sale(sale_id: int, changes: dict[str, Any]) -> bool:
     """
     Update fields on a sale row.
     
@@ -266,7 +264,6 @@ def update_sale(sale_id: int, changes: Dict[str, Any]) -> bool:
         with get_cursor() as (conn, cur):
             sql = f"UPDATE sales SET {', '.join(sets)} WHERE id=?"
             cur.execute(sql, tuple(params))
-            conn.commit()
             return True
     except Exception as e:
         logger.error(f"Error in update_sale: {e}")

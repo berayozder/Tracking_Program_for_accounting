@@ -1,3 +1,4 @@
+from __future__ import annotations
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 from pathlib import Path
@@ -5,9 +6,11 @@ import os
 import json
 import sys
 import subprocess
+import csv
+from datetime import datetime
 from .theme import stripe_treeview, maximize_window, apply_theme, themed_button
 
-import db as db
+import db
 from db.returns_dao import list_returns as db_list_returns, update_return as db_update_return, delete_return as db_delete_return, undelete_return as db_undelete_return
 from db.returns_dao import process_restock_change as db_process_restock_change
 
@@ -16,7 +19,6 @@ DB_COLS = ['id', 'return_date', 'product_id', 'sale_date', 'category', 'subcateg
 
 
 def open_view_returns_window(root):
-    import csv
     def do_export_csv():
         file_path = filedialog.asksaveasfilename(
             defaultextension='.csv',
@@ -93,9 +95,8 @@ def open_view_returns_window(root):
     def _coerce_for_sort(col_name, value):
         v = '' if value is None else str(value)
         if col_name.lower().endswith('date') or col_name.lower() in ('date',):
-            from datetime import datetime as _dt
             try:
-                return _dt.strptime(v, '%Y-%m-%d')
+                return datetime.strptime(v, '%Y-%m-%d')
             except Exception:
                 pass
         try:
@@ -394,7 +395,6 @@ def open_view_returns_window(root):
         ttk.Label(scroll_frame, text='Reason:').pack(pady=4)
         # Suggestions from DB plus defaults
         try:
-            import db as db
             reasons = db.get_distinct_return_reasons() or []
         except Exception:
             reasons = []
@@ -425,7 +425,6 @@ def open_view_returns_window(root):
             val = reason_var.get().strip()
             if val and val not in suggestions:
                 try:
-                    import db as db
                     db.add_return_reason(val)
                     suggestions.append(val)
                     reason_combo['values'] = suggestions
@@ -447,9 +446,8 @@ def open_view_returns_window(root):
             path = filedialog.askopenfilename(parent=dlg, title='Select document')
             if path:
                 try:
-                    from pathlib import Path as _P
                     doc_entry.delete(0, tk.END)
-                    doc_entry.insert(0, str(_P(path).resolve()))
+                    doc_entry.insert(0, str(Path(path).resolve()))
                 except Exception:
                     doc_entry.delete(0, tk.END)
                     doc_entry.insert(0, path)
@@ -459,10 +457,9 @@ def open_view_returns_window(root):
         doc_frame.pack(pady=2)
 
         def save_edit():
-            from datetime import datetime as _dt
             d = entries['return_date'].get().strip()
             try:
-                _dt.strptime(d, '%Y-%m-%d')
+                datetime.strptime(d, '%Y-%m-%d')
             except Exception:
                 messagebox.showerror('Invalid date', 'Use YYYY-MM-DD', parent=dlg)
                 return
@@ -585,10 +582,9 @@ def open_view_returns_window(root):
             paths = filedialog.askopenfilenames(parent=dlg, title='Select document(s)')
             if not paths:
                 return
-            from pathlib import Path as _P
             for p in paths:
                 try:
-                    rp = str(_P(p).resolve())
+                    rp = str(Path(p).resolve())
                 except Exception:
                     rp = str(p)
                 if rp and rp not in docs:

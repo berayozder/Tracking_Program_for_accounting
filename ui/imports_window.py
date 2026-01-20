@@ -1,3 +1,4 @@
+from __future__ import annotations
 import tkinter as tk
 from tkinter import ttk, messagebox
 from datetime import datetime
@@ -30,8 +31,6 @@ def open_imports_window(root):
 
     ensure_db()
     # Debug: Check DAO function availability
-    print("db.add_import:", getattr(db, 'add_import', None))
-    print("db.get_imports:", getattr(db, 'get_imports', None))
 
     # Use a scrollable canvas for the form so bottom buttons remain visible
     content_outer = ttk.Frame(window)
@@ -129,8 +128,7 @@ def open_imports_window(root):
 
     # Currency selection with default from settings
     try:
-        import db as _db  # local to avoid circular during module import
-        _default_ccy = _db.get_default_import_currency()
+        _default_ccy = db.get_default_import_currency()
     except Exception:
         _default_ccy = 'USD'
     ttk.Label(content_frame, text="Currency:").pack(pady=4)
@@ -617,9 +615,8 @@ def open_imports_window(root):
             else:
                 db.add_import(row_date, price, qty, supplier, notes, category, subcategory, cur, fx_override_val)
         except Exception as e:
-            import traceback
-            print("[ERROR] Exception in save_import:")
-            traceback.print_exc()
+            # logger.error(f"Exception in save_import: {e}")
+            import traceback; traceback.print_exc() # Keep traceback for non-debug mode? No, logger better.
             messagebox.showerror("Error", f"Failed to save import: {e}")
             return
         # We no longer update products by product name; imports only record the category/subcategory.

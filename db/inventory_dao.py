@@ -1,6 +1,8 @@
+"""Inventory management and tracking."""
+from __future__ import annotations
+
 from datetime import datetime
 from .connection import get_cursor
-from contextlib import ExitStack
 
 def get_inventory():
     with get_cursor() as (conn, cur):
@@ -48,7 +50,6 @@ def update_inventory(category, subcategory, quantity, cur=None):
                     'INSERT INTO inventory (category, subcategory, quantity, last_updated) VALUES (?,?,?,?)',
                     (category or '', subcategory or '', q, now)
                 )
-            conn.commit()
 
 
 def rebuild_inventory_from_imports(cur=None):

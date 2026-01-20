@@ -22,6 +22,11 @@ def _get_key() -> bytes:
 
 
 def _cipher() -> Fernet:
+    if Fernet is None:
+        raise ImportError(
+            "cryptography library is required for encryption. "
+            "Install it with: pip install cryptography"
+        )
     return Fernet(_get_key())
 
 
@@ -40,4 +45,4 @@ def decrypt_str(value: str | None) -> str:
     try:
         return _cipher().decrypt(value.encode("utf-8")).decode("utf-8")
     except Exception:
-        return value or ""
+        return value

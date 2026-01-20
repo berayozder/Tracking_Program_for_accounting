@@ -1,6 +1,8 @@
+from __future__ import annotations
 import tkinter as tk
 from tkinter import ttk, messagebox
 import db as db
+from .theme import apply_theme, themed_button
 
 
 def open_login_dialog(root) -> bool:
@@ -23,7 +25,6 @@ def open_login_dialog(root) -> bool:
     dlg.grab_set()
 
     try:
-        from .theme import apply_theme
         apply_theme(dlg)
     except Exception:
         pass
@@ -56,7 +57,6 @@ def open_login_dialog(root) -> bool:
 
     btns = ttk.Frame(frm)
     btns.pack(fill='x')
-    from .theme import themed_button
     themed_button(btns, text='Cancel', variant='secondary', command=lambda: dlg.destroy()).pack(side='left')
     themed_button(btns, text='Login', variant='primary', command=do_login).pack(side='right')
 
@@ -80,7 +80,6 @@ def _bootstrap_admin(root) -> bool:
     dlg.grab_set()
 
     try:
-        from .theme import apply_theme
         apply_theme(dlg)
     except Exception:
         pass
@@ -122,7 +121,6 @@ def _bootstrap_admin(root) -> bool:
 
     btns = ttk.Frame(frm)
     btns.pack(fill='x')
-    from .theme import themed_button
     themed_button(btns, text='Cancel', variant='secondary', command=lambda: dlg.destroy()).pack(side='left')
     themed_button(btns, text='Create', variant='primary', command=do_create).pack(side='right')
 

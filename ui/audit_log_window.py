@@ -1,6 +1,7 @@
+from __future__ import annotations
 import tkinter as tk
 from tkinter import ttk
-import db as db
+import db
 from .theme import maximize_window, stripe_treeview, themed_button, make_treeview_sortable, export_treeview_csv
 
 

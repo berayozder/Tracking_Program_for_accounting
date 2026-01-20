@@ -1,3 +1,4 @@
+from __future__ import annotations
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 from datetime import datetime
@@ -189,7 +190,6 @@ def open_sales_window(root):
     kdv_dahil_cb.pack(side='left', padx=(16, 0))
 
     # Sale Currency selector
-    from .theme import apply_theme as _ap
     cur_frame = ttk.Frame(form_section)
     cur_frame.pack(fill='x', pady=(0, 12))
     ttk.Label(cur_frame, text='Sale Currency:', font=('', 9, 'bold')).pack(side='left', anchor='w')
@@ -283,7 +283,6 @@ def open_sales_window(root):
         else:
             _set_fx_manual('Offline - enter rate')
 
-    from .theme import themed_button
     refresh_btn = themed_button(right_fx, text='Refresh', variant='primary', command=do_refresh_rate)
     refresh_btn.pack(side='right')
 
@@ -540,11 +539,8 @@ def open_sales_window(root):
             messagebox.showerror('Invalid VAT Rate', 'KDV Oranı geçerli bir sayı olmalı (örn: 18)')
             return
 
-        # Customer required
         customer_name = customer_e.get().strip()
-        if not customer_name:
-            messagebox.showerror('Missing Customer', 'Customer is required. Please select or enter a customer.')
-            return
+        # Customer is optional, no validation needed
 
         cat = cat_e.get().strip()
         sub = sub_e.get().strip()
@@ -761,7 +757,7 @@ def open_sales_window(root):
                 'SaleCurrency': (sale_ccy_var.get() or ''),
                 'Platform': platform,
                 'ProductID': pid,
-                'CustomerID': customer_id or '',
+                'CustomerID': customer_id,
                 'DocumentPath': '',
                 'FXToBase': fx,
                 'SellingPriceBase': usd_unit,

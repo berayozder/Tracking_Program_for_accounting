@@ -1,7 +1,8 @@
+from __future__ import annotations
 import tkinter as tk
 from tkinter import ttk
 from datetime import datetime
-import db as db
+import db
 from .theme import apply_theme, stripe_treeview, maximize_window
 
 

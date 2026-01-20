@@ -1,7 +1,8 @@
-from .connection import get_conn, get_cursor
-from datetime import datetime
+"""Customer data access operations."""
+from __future__ import annotations
 
-# ---------------- CUSTOMER MANAGEMENT ----------------
+from datetime import datetime
+from .connection import get_cursor
 
 def _row_to_dict(row, cols):
     """Convert a DB row (sqlite3.Row or tuple) to dict given column names."""
@@ -44,7 +45,6 @@ def add_customer(name, email='', phone='', address='', notes=''):
                 INSERT INTO customers(customer_id, name, email, phone, address, notes, created_date)
                 VALUES (?,?,?,?,?,?,?)
             ''', (cid, name.strip(), email.strip(), phone.strip(), address.strip(), notes.strip(), created_date))
-            conn.commit()
             return cid
     except Exception:
         return None
@@ -77,7 +77,6 @@ def write_customers(customers):
                     c.get('customer_id'), c.get('name'), c.get('email'),
                     c.get('phone'), c.get('address'), c.get('notes'), c.get('created_date')
                 ))
-            conn.commit()
     except Exception:
         pass
 

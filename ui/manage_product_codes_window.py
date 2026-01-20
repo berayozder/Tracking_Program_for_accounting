@@ -1,6 +1,7 @@
+from __future__ import annotations
 import tkinter as tk
 from tkinter import ttk, messagebox
-import db as db
+import db
 from .theme import maximize_window, themed_button, ask_integer, stripe_treeview, apply_theme
 
 

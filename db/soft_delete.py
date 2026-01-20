@@ -1,11 +1,16 @@
+"""Soft delete and transaction voiding functionality."""
+from __future__ import annotations
+
 from datetime import datetime
 from typing import Optional
-from .connection import get_cursor
-from .audit import write_audit
 import traceback
 
+from .connection import get_cursor
+from .audit import write_audit
 
-def _now_str():
+
+def _now_str() -> str:
+    """Return current timestamp as formatted string."""
     return datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
 
