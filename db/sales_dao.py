@@ -268,3 +268,22 @@ def update_sale(sale_id: int, changes: dict[str, Any]) -> bool:
     except Exception as e:
         logger.error(f"Error in update_sale: {e}")
         return False
+
+def get_allocations_by_sale_id(sale_id: int) -> list[dict[str, Any]]:
+    """
+    Fetch batch allocations for a given sale_id.
+    """
+    try:
+        with get_cursor() as (conn, cur):
+            cur.execute('''
+                SELECT sba.*, ib.supplier, ib.batch_date
+                FROM sale_batch_allocations sba
+                LEFT JOIN import_batches ib ON sba.batch_id = ib.id
+                WHERE sba.sale_id = ? AND (sba.deleted IS NULL OR sba.deleted = 0)
+                ORDER BY sba.id
+            ''', (sale_id,))
+            rows = [dict(r) for r in cur.fetchall()]
+            return rows
+    except Exception as e:
+        logger.error(f"Error in get_allocations_by_sale_id: {e}")
+        return []

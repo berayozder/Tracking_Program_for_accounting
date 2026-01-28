@@ -136,7 +136,7 @@ def add_expense(
         if ids:
             for iid in ids:
                 try:
-                    recompute_import_batches(int(iid))
+                    recompute_import_batches(int(iid), conn=conn, cur=_cur)
                     logger.debug(f"Recomputed import batch for import_id: {iid}")
                 except Exception as e:
                     logger.warning(f"Failed to recompute import batch for {iid}: {e}")
@@ -239,16 +239,16 @@ def edit_expense(
             
         write_audit('edit', 'expense', str(expense_id), f"amount={amount}", cur=cur)
 
-    # Trigger recompute
-    try:
-        if ids:
-            for iid in ids:
-                try:
-                    recompute_import_batches(int(iid))
-                except Exception:
-                    pass
-    except Exception:
-        pass
+        # Trigger recompute
+        try:
+            if ids:
+                for iid in ids:
+                    try:
+                        recompute_import_batches(int(iid), conn=conn, cur=cur)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
 
 
 def get_expense_import_links(expense_id: int) -> list[int]:
@@ -264,40 +264,46 @@ def get_expense_import_links(expense_id: int) -> list[int]:
 
 def delete_expense(expense_id: int) -> None:
     """Soft delete an expense."""
-    try:
-        linked = get_expense_import_links(expense_id)
-        if linked:
-            for iid in linked:
-                try:
-                    recompute_import_batches(int(iid))
-                except Exception:
-                    pass
-    except Exception:
-        pass
-        
     require_admin('delete', 'expense', str(expense_id))
     
     with get_cursor() as (conn, cur):
         cur.execute('UPDATE expenses SET deleted = 1 WHERE id=?', (expense_id,))
         write_audit('delete', 'expense', str(expense_id), cur=cur)
 
+        # Recompute after delete
+        try:
+            linked = get_expense_import_links(expense_id)
+            if linked:
+                for iid in linked:
+                    try:
+                        recompute_import_batches(int(iid), conn=conn, cur=cur)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
 
 def undelete_expense(expense_id: int) -> bool:
     """Restore a soft-deleted expense."""
     try:
         linked = get_expense_import_links(expense_id)
-        if linked:
-            for iid in linked:
-                try:
-                    recompute_import_batches(int(iid))
-                except Exception:
-                    pass
     except Exception:
         pass
         
     try:
         with get_cursor() as (conn, cur):
             cur.execute('UPDATE expenses SET deleted = 0 WHERE id = ?', (expense_id,))
+            
+            # Recompute after undelete
+            try:
+                if linked:
+                    for iid in linked:
+                        try:
+                            recompute_import_batches(int(iid), conn=conn, cur=cur)
+                        except Exception:
+                            pass
+            except Exception:
+                pass
     except Exception:
         return False
 

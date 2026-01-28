@@ -10,7 +10,7 @@ from typing import List, Dict, Any, Optional, Union, Tuple, Set
 
 from .theme import stripe_treeview, maximize_window, themed_button, apply_theme
 import core.fx_rates as fx_rates
-from db.sales_dao import list_sales, overwrite_sales, mark_sale_deleted, update_sale
+from db.sales_dao import list_sales, overwrite_sales, mark_sale_deleted, update_sale, get_allocations_by_sale_id
 from db.returns_dao import list_returns, insert_return, get_distinct_return_reasons, add_return_reason
 from db import read_customers, list_sales as db_list_sales
 from db.imports_dao import get_sale_batch_info
@@ -308,12 +308,91 @@ def open_view_sales_window(root: tk.Tk):
                 else:
                     vals[doc_idx] = f"{len(doc_list)} docs"
 
-                # Insert Row
+                # Insert Row (Parent)
                 tag = 'returned' if is_returned else ''
-                # Use DB ID as iid if available, else index
                 iid_val = str(r.get('id')) if r.get('id') is not None else str(idx)
-                tree.insert('', 0, iid=iid_val, values=vals, tags=(tag,))
+                
+                # Insert at 0 to keep "newest first" visual order (since input list is oldest first)
+                tree.insert('', 0, iid=iid_val, values=vals, tags=(tag,), open=False)
                 shown += 1
+                
+                # --- Insert Child Allocations ---
+                try:
+                    sale_id = int(r.get('id', 0))
+                    if sale_id:
+                        allocs = get_allocations_by_sale_id(sale_id)
+                        for alloc in allocs:
+                            # Map allocation fields to columns
+                            # Alloc: id, product_id, sale_id, sale_date, category, subcategory, batch_id, 
+                            # quantity, quantity_from_batch, unit_cost, unit_sale_price, profit_per_unit, supplier, batch_date
+                            
+                            # Calculate derivation for display
+                            qty = float(alloc.get('quantity_from_batch') or 0)
+                            u_price = float(alloc.get('unit_sale_price') or 0)
+                            # Inherit VAT rate from parent sale for display approx
+                            v_rate = float(r.get('vat_rate', 18.0) or 18.0)
+                            is_incl = int(r.get('is_vat_inclusive', 1) or 1)
+                            
+                            net_unit = u_price / (1 + v_rate/100) if is_incl else u_price
+                            vat_unit = u_price - net_unit if is_incl else u_price * v_rate/100
+                            gross_unit = u_price if is_incl else u_price + vat_unit
+                            
+                            row_net = net_unit * qty
+                            row_vat = vat_unit * qty
+                            row_gross = gross_unit * qty
+                            
+                            child_vals = []
+                            for c in cols:
+                                if c == 'Date':
+                                    child_vals.append(alloc.get('sale_date', ''))
+                                elif c == 'Category':
+                                    child_vals.append(alloc.get('category', ''))
+                                elif c == 'Subcategory':
+                                    child_vals.append(alloc.get('subcategory', ''))
+                                elif c == 'Quantity':
+                                    child_vals.append(f"{qty:g}") # format float nicely
+                                elif c == 'SellingPrice':
+                                    # Show Total for this batch chunk or unit? Parent shows Unit usually if qty=1, but Total if qty>1?
+                                    # Actually parent SellingPrice usually is TOTAL price in UI? 
+                                    # Dictionary says: selling_price. 
+                                    # Check _normalize_row_for_ui -> amt = r.get('selling_price')
+                                    # If 'quantity' > 1, 'selling_price' usually is unit price * qty in some systems, or unit price.
+                                    # Let's check `add_sale`: selling_price is passed directly. 
+                                    # Looking at `_normalize_row_for_ui`, `SellingPrice` seems to be the value from DB.
+                                    # In `sales` table, `selling_price` is commonly absolute value (total).
+                                    # However, `sale_batch_allocations` has `unit_sale_price`.
+                                    # So we multiply by qty to match "Total Selling Price" expectation if parent is Total.
+                                    # If parent is Unit, we use Unit.
+                                    
+                                    # Let's assume parent shows Total Selling Price (standard for accounting lists).
+                                    # But `schema.py` says `selling_price REAL`.
+                                    # Let's stick to showing the calculated sub-total for this batch.
+                                    child_vals.append(f"{idx_u_price_total(u_price, qty, r):.2f}")
+                                elif c == 'VAT Rate':
+                                    child_vals.append(f"{v_rate:.2f}")
+                                elif c == 'VAT Amount':
+                                    child_vals.append(f"{row_vat:.2f}")
+                                elif c == 'Net':
+                                    child_vals.append(f"{row_net:.2f}")
+                                elif c == 'Gross':
+                                    child_vals.append(f"{row_gross:.2f}")
+                                elif c == 'Platform':
+                                    # Show Batch ID
+                                    child_vals.append(f"Batch #{alloc.get('batch_id')}")
+                                elif c == 'ProductID':
+                                    child_vals.append(alloc.get('product_id', ''))
+                                elif c == 'CustomerID':
+                                    child_vals.append('') # Redundant
+                                elif c == 'DocumentPath':
+                                    # Show Supplier
+                                    child_vals.append(f"Supplier: {alloc.get('supplier', 'N/A')}")
+                                else:
+                                    child_vals.append('')
+                            
+                            tree.insert(iid_val, 'end', values=child_vals, tags=('allocation',))
+                except Exception as e:
+                    logger.error(f"Error populate tree children: {e}")
+
                 
                 # Accumulate Totals (exclude returns)
                 if not is_returned:
@@ -355,8 +434,16 @@ def open_view_sales_window(root: tk.Tk):
         stripe_treeview(tree)
         try:
             tree.tag_configure('returned', background='#fff9e6', foreground='#8a6d00', font=('', 9, 'bold'))
+            tree.tag_configure('allocation', foreground='#555555', font=('', 9, 'italic'))
         except Exception:
             pass
+            
+    # Helper to calculate price for child
+    def idx_u_price_total(u_price, qty, parent_row):
+        # We try to infer if parent SellingPrice is Total or Unit. 
+        # Usually sales list shows Total Amount of the sale.
+        # So we return u_price * qty.
+        return u_price * qty
 
     def refresh():
         """Reload sales and refresh the tree view."""
@@ -850,6 +937,13 @@ def open_view_sales_window(root: tk.Tk):
     primary_frame = ttk.Frame(btn_frame)
     primary_frame.pack(side='left', fill='x', expand=True)
     
+    def select_all():
+        try:
+            # Select all parent items
+            tree.selection_set(tree.get_children(''))
+        except Exception:
+            pass
+
     themed_button(primary_frame, text='✏️ Edit', variant='success', 
               command=do_edit).pack(side=tk.LEFT, padx=(0, 8))
     themed_button(primary_frame, text='🔄 Refresh', variant='primary',
