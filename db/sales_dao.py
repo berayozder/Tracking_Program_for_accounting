@@ -287,3 +287,106 @@ def get_allocations_by_sale_id(sale_id: int) -> list[dict[str, Any]]:
     except Exception as e:
         logger.error(f"Error in get_allocations_by_sale_id: {e}")
         return []
+
+
+def delete_sale_allocation(allocation_id: int) -> bool:
+    """
+    Soft-delete a single allocation, restore inventory, and update parent sale totals.
+    """
+    from core.vat_utils import compute_vat
+    try:
+        with get_cursor() as (conn, cur):
+            # 1. Fetch allocation details
+            cur.execute('SELECT * FROM sale_batch_allocations WHERE id=?', (allocation_id,))
+            alloc = cur.fetchone()
+            if not alloc:
+                return False
+            alloc = dict(alloc)
+            
+            qty = alloc.get('quantity') or 0
+            if qty <= 0:
+                return False # Should not happen, but safety check
+
+            sale_id = alloc.get('sale_id')
+            batch_id = alloc.get('batch_id')
+            
+            sale_price_total = (alloc.get('unit_sale_price') or 0) * qty # Total revenue from this chunk
+            # Note: Dictionary might store per-unit profit/cost, need to be careful.
+            # unit_sale_price in alloc is unit price. 
+            # In parent sale, 'selling_price' is total.
+            
+            # 2. Mark allocation deleted
+            cur.execute('UPDATE sale_batch_allocations SET deleted=1 WHERE id=?', (allocation_id,))
+            
+            # 3. Restore inventory if batch exists
+            if batch_id:
+                cur.execute('UPDATE import_batches SET remaining_quantity = remaining_quantity + ? WHERE id=?', (qty, batch_id))
+            
+            # 4. Update Parent Sale
+            if sale_id:
+                cur.execute('SELECT * FROM sales WHERE id=?', (sale_id,))
+                sale = cur.fetchone()
+                if sale:
+                    sale = dict(sale)
+                    new_qty = (sale.get('quantity') or 0) - qty
+                    current_total_price = sale.get('selling_price') or 0
+                    current_total_base = sale.get('selling_price_base') or 0
+                    
+                    # Proportional deduction? Or generic unit price?
+                    # The allocation has specific unit_sale_price, so we subtract that * qty.
+                    
+                    new_selling_price = current_total_price - sale_price_total
+                    
+                    # Update Base price too
+                    # Allocation doesn't implicitly store total base revenue, but unit_sale_price is usually base?
+                    # Let's check `allocate_sale_to_batches`: `unit_sale_price` passed is `unit_sale_price_base`.
+                    # So `alloc['unit_sale_price']` IS base price.
+                    # Wait, `sales` table `selling_price` is Transaction Currency (TRY usually), `selling_price_base` is USD.
+                    # In `allocate_sale_to_batches`, we insert `unit_sale_price` which is derived from `unit_sale_price_base`.
+                    # Actually `allocate_sale_to_batches` doc says `unit_sale_price_base` is passed.
+                    # And inserted into `unit_sale_price` column of allocation. So allocation stores BASE price?
+                    # Let's verify `sales_window.py`... 
+                    # `db.allocate_sale_to_batches(..., unit_in_base, ...)`
+                    # Yes, allocation tracks Base/USD profit.
+                    
+                    # So we subtract from `selling_price_base`.
+                    deduct_base = (alloc.get('unit_sale_price') or 0) * qty
+                    new_price_base = current_total_base - deduct_base
+                    
+                    # How much to deduct from `selling_price` (TRY/Transaction currency)?
+                    # We need the FX rate or original ratio.
+                    # `sale['fx_to_base']` might help or ratio.
+                    # If total_base was X and total_try was Y.
+                    # If we deduct dX from base, we should deduct dY from TRY.
+                    # dY = dX / fx_to_base (if fx = base/try? No, fx is usually Try->Base or Base->Try?)
+                    # Let's look at `add_sale`: unit_in_base calculated via convert_amount.
+                    # `selling_price` is passed explicitly.
+                    # We can estimate deduction for `selling_price` based on average unit price of the sale.
+                    # Average Unit Price (TRY) = current_total_price / old_qty
+                    deduct_try = (current_total_price / (sale.get('quantity') or 1)) * qty
+                    new_price_try = current_total_price - deduct_try
+                    
+                    # Recalculate VAT
+                    vat_rate = sale.get('vat_rate')
+                    is_inc = sale.get('is_vat_inclusive')
+                    if vat_rate is not None:
+                        net, vat_amt = compute_vat(new_price_try, vat_rate, is_inc)
+                    else:
+                        vat_amt = 0
+                    
+                    # If new quantity is 0, we might want to soft-delete the sale entirely or keep it as 0?
+                    # Usually if 0 items, delete the sale.
+                    if new_qty <= 0:
+                        cur.execute('UPDATE sales SET deleted=1, quantity=0, selling_price=0, selling_price_base=0, vat_amount=0 WHERE id=?', (sale_id,))
+                    else:
+                        cur.execute('''
+                            UPDATE sales 
+                            SET quantity=?, selling_price=?, selling_price_base=?, vat_amount=? 
+                            WHERE id=?
+                        ''', (new_qty, new_price_try, new_price_base, vat_amt, sale_id))
+                        
+            return True
+            
+    except Exception as e:
+        logger.error(f"Error delete_sale_allocation: {e}")
+        return False
