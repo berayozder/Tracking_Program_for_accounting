@@ -13,6 +13,7 @@ import core.fx_rates as fx_rates
 from db.sales_dao import list_sales, overwrite_sales, mark_sale_deleted, update_sale, get_allocations_by_sale_id
 from db.returns_dao import list_returns, insert_return, get_distinct_return_reasons, add_return_reason
 from db import read_customers, list_sales as db_list_sales
+import db
 from db.imports_dao import get_sale_batch_info
 
 logger = logging.getLogger(__name__)
@@ -523,10 +524,23 @@ def open_view_sales_window(root: tk.Tk):
             return
 
         # Gather DB ids from selection
-        ids = []
+        ids = set()
         for iid in sel:
             try:
-                ids.append(int(iid))
+                # Check if this item is a child (allocation) or parent (sale)
+                parent_iid = tree.parent(iid)
+                if parent_iid:
+                    # It's a child; allow deleting the parent sale if a child is selected?
+                    # Or just ignore children?
+                    # Let's verify if the user intends to delete the whole sale.
+                    # Usually, selecting a child means referring to the sale.
+                    try:
+                         ids.add(int(parent_iid))
+                    except:
+                         pass
+                else:
+                    # It's a parent
+                    ids.add(int(iid))
             except Exception:
                 # fallback: try to map via ProductID value against current rows
                 try:
@@ -537,11 +551,13 @@ def open_view_sales_window(root: tk.Tk):
                         all_rows = read_sales(include_deleted=True)
                         found = next((r for r in all_rows if str(r.get('ProductID','')) == str(pidv)), None)
                         if found and found.get('id'):
-                            ids.append(int(found.get('id')))
+                            ids.add(int(found.get('id')))
                 except Exception:
                     pass
+        
+        ids = list(ids) # convert back to list
         if not ids:
-            messagebox.showinfo('Nothing', 'No matching rows to delete')
+            messagebox.showinfo('Nothing', 'No matching sale rows to delete (allocations cannot be deleted individually)')
             return
 
         try:
