@@ -10,7 +10,7 @@ from typing import List, Dict, Any, Optional, Union, Tuple, Set
 
 from .theme import stripe_treeview, maximize_window, themed_button, apply_theme
 import core.fx_rates as fx_rates
-from db.sales_dao import list_sales, overwrite_sales, mark_sale_deleted, update_sale, get_allocations_by_sale_id, delete_sale_allocation
+from db.sales_dao import list_sales, overwrite_sales, mark_sale_deleted, update_sale, delete_sale_allocation, get_allocations_for_sales
 from db.returns_dao import list_returns, insert_return, get_distinct_return_reasons, add_return_reason
 from db import read_customers, list_sales as db_list_sales
 import db
@@ -253,175 +253,178 @@ def open_view_sales_window(root: tk.Tk):
     def populate_tree(all_rows: List[Dict], yy: str, q: str = ''):
         tree.delete(*tree.get_children())
         
-        shown = 0
+        filtered = []
+        q_norm = q.lower() if q else ''
+        target_year = None
+        if yy != 'All':
+            try:
+                 target_year = int(yy)
+            except:
+                 pass
+        
         total_stats = {
-            'sell': 0.0,
-            'sell_usd': 0.0,
-            'vat': 0.0,
-            'net': 0.0,
-            'gross': 0.0,
+            'net':0.0, 'vat':0.0, 'gross':0.0, 'sell':0.0, 'sell_usd':0.0,
             'computed_usd_count': 0
         }
         
-        returned_ids = set()
-        try:
-            for rr in read_returns():
-                pid = str(rr.get('ProductID') or '').strip()
-                if pid:
-                    returned_ids.add(pid)
-        except Exception:
-            pass
-            
-        return_filter = return_var.get()
-        
-        for idx, r in enumerate(all_rows):
-            is_returned = str(r.get('ProductID') or '').strip() in returned_ids
-            
-            if (row_matches_year(r, yy) and 
-                row_matches_search(r, q) and 
-                row_matches_returned(r, return_filter, returned_ids)):
-                
-                vals = [r.get(c, '') for c in cols]
-                
-                # --- Post-process values for display ---
-                
-                # Mark returned items text
-                pid_idx = cols.index('ProductID')
-                pid_val = str(vals[pid_idx])
-                if pid_val in returned_ids:
-                    vals[pid_idx] = f"{pid_val} (Returned)"
-                
-                # Resolve Customer Name
-                cust_idx = cols.index('CustomerID')
-                cust_id = str(vals[cust_idx])
-                if cust_id in customer_names:
-                    vals[cust_idx] = customer_names[cust_id]
-                elif cust_id.strip():
-                    vals[cust_idx] = f"{cust_id} (Unknown)"
-                    
-                # Format Document Count
-                doc_idx = cols.index('DocumentPath')
-                doc_list = parse_docs(r.get('DocumentPath', ''))
-                if not doc_list:
-                    vals[doc_idx] = ''
-                elif len(doc_list) == 1:
-                    vals[doc_idx] = doc_list[0]
-                else:
-                    vals[doc_idx] = f"{len(doc_list)} docs"
-
-                # Insert Row (Parent)
-                tag = 'returned' if is_returned else ''
-                iid_val = str(r.get('id')) if r.get('id') is not None else str(idx)
-                
-                # Insert at 0 to keep "newest first" visual order (since input list is oldest first)
-                tree.insert('', 0, iid=iid_val, values=vals, tags=(tag,), open=False)
-                shown += 1
-                
-                # --- Insert Child Allocations ---
+        # Filter first
+        for r in all_rows:
+            d_str = str(r.get('Date') or '')
+            if target_year:
                 try:
-                    sale_id = int(r.get('id', 0))
-                    if sale_id:
-                        allocs = get_allocations_by_sale_id(sale_id)
-                        for alloc in allocs:
-                            # Map allocation fields to columns
-                            # Alloc: id, product_id, sale_id, sale_date, category, subcategory, batch_id, 
-                            # quantity, quantity_from_batch, unit_cost, unit_sale_price, profit_per_unit, supplier, batch_date
-                            
-                            # Calculate derivation for display
-                            qty = float(alloc.get('quantity_from_batch') or 0)
-                            u_price = float(alloc.get('unit_sale_price') or 0)
-                            # Inherit VAT rate from parent sale for display approx
-                            v_rate = float(r.get('vat_rate', 18.0) or 18.0)
-                            is_incl = int(r.get('is_vat_inclusive', 1) or 1)
-                            
-                            net_unit = u_price / (1 + v_rate/100) if is_incl else u_price
-                            vat_unit = u_price - net_unit if is_incl else u_price * v_rate/100
-                            gross_unit = u_price if is_incl else u_price + vat_unit
-                            
-                            row_net = net_unit * qty
-                            row_vat = vat_unit * qty
-                            row_gross = gross_unit * qty
-                            
-                            child_vals = []
-                            for c in cols:
-                                if c == 'Date':
-                                    child_vals.append(alloc.get('sale_date', ''))
-                                elif c == 'Category':
-                                    child_vals.append(alloc.get('category', ''))
-                                elif c == 'Subcategory':
-                                    child_vals.append(alloc.get('subcategory', ''))
-                                elif c == 'Quantity':
-                                    child_vals.append(f"{qty:g}") # format float nicely
-                                elif c == 'SellingPrice':
-                                    # Show Total for this batch chunk or unit? Parent shows Unit usually if qty=1, but Total if qty>1?
-                                    # Actually parent SellingPrice usually is TOTAL price in UI? 
-                                    # Dictionary says: selling_price. 
-                                    # Check _normalize_row_for_ui -> amt = r.get('selling_price')
-                                    # If 'quantity' > 1, 'selling_price' usually is unit price * qty in some systems, or unit price.
-                                    # Let's check `add_sale`: selling_price is passed directly. 
-                                    # Looking at `_normalize_row_for_ui`, `SellingPrice` seems to be the value from DB.
-                                    # In `sales` table, `selling_price` is commonly absolute value (total).
-                                    # However, `sale_batch_allocations` has `unit_sale_price`.
-                                    # So we multiply by qty to match "Total Selling Price" expectation if parent is Total.
-                                    # If parent is Unit, we use Unit.
-                                    
-                                    # Let's assume parent shows Total Selling Price (standard for accounting lists).
-                                    # But `schema.py` says `selling_price REAL`.
-                                    # Let's stick to showing the calculated sub-total for this batch.
-                                    child_vals.append(f"{idx_u_price_total(u_price, qty, r):.2f}")
-                                elif c == 'VAT Rate':
-                                    child_vals.append(f"{v_rate:.2f}")
-                                elif c == 'VAT Amount':
-                                    child_vals.append(f"{row_vat:.2f}")
-                                elif c == 'Net':
-                                    child_vals.append(f"{row_net:.2f}")
-                                elif c == 'Gross':
-                                    child_vals.append(f"{row_gross:.2f}")
-                                elif c == 'Platform':
-                                    # Show Batch ID
-                                    child_vals.append(f"Batch #{alloc.get('batch_id')}")
-                                elif c == 'ProductID':
-                                    child_vals.append(alloc.get('product_id', ''))
-                                elif c == 'CustomerID':
-                                    child_vals.append('') # Redundant
-                                elif c == 'DocumentPath':
-                                    # Show Supplier
-                                    child_vals.append(f"Supplier: {alloc.get('supplier', 'N/A')}")
-                                else:
-                                    child_vals.append('')
-                            
-                            # Use explicit ID for allocation row so we can identify it later
-                            alloc_iid = f"alloc_{alloc.get('id')}"
-                            tree.insert(iid_val, 'end', iid=alloc_iid, values=child_vals, tags=('allocation',))
-                except Exception as e:
-                    logger.error(f"Error populate tree children: {e}")
-
+                    yd = int(d_str[:4])
+                    if yd != target_year:
+                        continue
+                except:
+                    continue
+            
+            # search
+            if q_norm:
+                bucket = (
+                    str(r.get('Category') or '') + 
+                    str(r.get('Subcategory') or '') + 
+                    str(r.get('Platform') or '') + 
+                    str(r.get('Supplier') or '') +
+                    str(r.get('ProductID') or '') +
+                    str(r.get('CustomerID') or '')
+                ).lower()
+                if q_norm not in bucket:
+                    continue
                 
-                # Accumulate Totals (exclude returns)
-                if not is_returned:
-                    try:
-                        total_stats['sell'] += float(r.get('SellingPrice') or 0)
-                        total_stats['vat'] += float(r.get('VAT Amount') or 0)
-                        total_stats['net'] += float(r.get('Net') or 0)
-                        total_stats['gross'] += float(r.get('Gross') or 0)
+            filtered.append(r)
+
+        # Bulk Fetch Allocations (Optimization)
+        visible_sale_ids = []
+        for r in filtered:
+             sid = r.get('id')
+             if sid:
+                 try:
+                     visible_sale_ids.append(int(sid))
+                 except: 
+                     pass
+        
+        allocations_map = {}
+        if visible_sale_ids:
+            allocations_map = get_allocations_for_sales(visible_sale_ids)
+
+
+        shown = 0
+        idx = 0
+        
+        for r in filtered:
+            idx += 1
+            is_returned = True if str(r.get('Deleted') or '').lower() in ('1','true','yes') else False
+            
+            # Build parent values
+            vals = [''] * len(cols)
+            for i, c in enumerate(cols):
+                vals[i] = r.get(c, '')
+            
+            # Helper to format float safe
+            def fmt_float(v, decimals=None):
+                try:
+                    vf = float(v or 0)
+                    if decimals is not None:
+                         return f"{vf:.{decimals}f}"
+                    return f"{vf:g}"
+                except:
+                    return v
+
+            if 'Quantity' in cols:
+                vals[cols.index('Quantity')] = fmt_float(r.get('Quantity'), None)
+            if 'SellingPrice' in cols:
+                vals[cols.index('SellingPrice')] = fmt_float(r.get('SellingPrice'), 2)
+            if 'VAT Rate' in cols:
+                vals[cols.index('VAT Rate')] = fmt_float(r.get('VAT Rate'), 2)
+            if 'VAT Amount' in cols:
+                vals[cols.index('VAT Amount')] = fmt_float(r.get('VAT Amount'), 2)
+            if 'Net' in cols:
+                vals[cols.index('Net')] = fmt_float(r.get('Net'), 2)
+            if 'Gross' in cols:
+                vals[cols.index('Gross')] = fmt_float(r.get('Gross'), 2)
+            
+            # Customer
+            cust_idx = cols.index('CustomerID')
+            vals[cust_idx] = r.get('CustomerID', '')
+
+            # Document Count
+            doc_idx = cols.index('DocumentPath')
+            doc_list = parse_docs(r.get('DocumentPath', ''))
+            vals[doc_idx] = f"{len(doc_list)} docs" if len(doc_list) > 1 else (doc_list[0] if doc_list else '')
+
+            # Insert Row (Parent)
+            tag = 'returned' if is_returned else ''
+            iid_val = str(r.get('id')) if r.get('id') is not None else str(idx)
+            
+            tree.insert('', 0, iid=iid_val, values=vals, tags=(tag,), open=False)
+            shown += 1
+            
+            # --- Insert Child Allocations (FROM MAP) ---
+            try:
+                sale_id = int(r.get('id', 0))
+                if sale_id and sale_id in allocations_map:
+                    allocs = allocations_map[sale_id]
+                    for alloc in allocs:
+                        qty = float(alloc.get('quantity_from_batch') or 0)
+                        u_price = float(alloc.get('unit_sale_price') or 0)
+                        v_rate = float(r.get('vat_rate', 18.0) or 18.0)
+                        is_incl = int(r.get('is_vat_inclusive', 1) or 1)
                         
-                        # USD conversion logic
-                        usd_val = None
-                        if r.get('SellingPriceUSD') not in (None, ''):
-                             usd_val = float(r.get('SellingPriceUSD'))
+                        net_unit = u_price / (1 + v_rate/100) if is_incl else u_price
+                        vat_unit = u_price - net_unit if is_incl else u_price * v_rate/100
+                        gross_unit = u_price if is_incl else u_price + vat_unit
                         
-                        if usd_val is None:
-                            # Try computed conversion
-                            d_str = str(r.get('Date') or '').strip()
-                            rate = fx_rates.get_rate_for_date(d_str)
-                            if rate and rate > 0:
-                                usd_val = float(r.get('SellingPrice') or 0) / float(rate)
-                                total_stats['computed_usd_count'] += 1
+                        row_net = net_unit * qty
+                        row_vat = vat_unit * qty
+                        row_gross = gross_unit * qty
                         
-                        if usd_val is not None:
-                            total_stats['sell_usd'] += usd_val
-                    except Exception:
-                        pass
+                        child_vals = []
+                        for c in cols:
+                            if c == 'Date': child_vals.append(alloc.get('sale_date', ''))
+                            elif c == 'Category': child_vals.append(alloc.get('category', ''))
+                            elif c == 'Subcategory': child_vals.append(alloc.get('subcategory', ''))
+                            elif c == 'Quantity': child_vals.append(f"{qty:g}")
+                            elif c == 'SellingPrice': child_vals.append(f"{idx_u_price_total(u_price, qty, r):.2f}")
+                            elif c == 'VAT Rate': child_vals.append(f"{v_rate:.2f}")
+                            elif c == 'VAT Amount': child_vals.append(f"{row_vat:.2f}")
+                            elif c == 'Net': child_vals.append(f"{row_net:.2f}")
+                            elif c == 'Gross': child_vals.append(f"{row_gross:.2f}")
+                            elif c == 'Platform': child_vals.append(f"Batch #{alloc.get('batch_id')}")
+                            elif c == 'ProductID': child_vals.append(alloc.get('product_id', ''))
+                            elif c == 'CustomerID': child_vals.append('')
+                            elif c == 'DocumentPath': child_vals.append(f"Supplier: {alloc.get('supplier', 'N/A')}")
+                            else: child_vals.append('')
+                        
+                        alloc_iid = f"alloc_{alloc.get('id')}"
+                        tree.insert(iid_val, 'end', iid=alloc_iid, values=child_vals, tags=('allocation',))
+            except Exception as e:
+                logger.error(f"Error populate tree children: {e}")
+
+            # Accumulate Totals (exclude returns)
+            if not is_returned:
+                try:
+                    total_stats['sell'] += float(r.get('SellingPrice') or 0)
+                    total_stats['vat'] += float(r.get('VAT Amount') or 0)
+                    total_stats['net'] += float(r.get('Net') or 0)
+                    total_stats['gross'] += float(r.get('Gross') or 0)
+                    
+                    # USD conversion logic
+                    usd_val = None
+                    if r.get('SellingPriceUSD') not in (None, ''):
+                            usd_val = float(r.get('SellingPriceUSD'))
+                    
+                    if usd_val is None:
+                        # Try computed conversion
+                        d_str = str(r.get('Date') or '').strip()
+                        rate = fx_rates.get_rate_for_date(d_str)
+                        if rate and rate > 0:
+                            usd_val = float(r.get('SellingPrice') or 0) / float(rate)
+                            total_stats['computed_usd_count'] += 1
+                    
+                    if usd_val is not None:
+                        total_stats['sell_usd'] += usd_val
+                except Exception:
+                    pass
 
         suffix = f" (computed {total_stats['computed_usd_count']} from rates)" if total_stats['computed_usd_count'] else ""
         totals_var.set(

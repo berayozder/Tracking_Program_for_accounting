@@ -595,21 +595,6 @@ def backfill_allocation_unit_costs() -> None:
         ''')
 
 
-def undelete_allocation(allocation_id: int) -> bool:
-    """
-    Restore a soft-deleted sale_batch_allocation by id. Returns True if successful.
-    """
-    try:
-        with get_cursor() as (conn, cur):
-            cur.execute(
-                'UPDATE sale_batch_allocations SET deleted = 0 WHERE id = ?',
-                (allocation_id,)
-            )
-        return True
-    except Exception:
-        return False
-
-
 def get_sale_batch_info(product_id: int) -> list[dict]:
     """
     Return batch allocation info for a given product_id.

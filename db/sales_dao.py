@@ -160,31 +160,7 @@ def get_distinct_sale_platforms() -> list[str]:
         return []
 
 
-def undelete_sales_by_indices(indices: list[int]) -> int:
-    """
-    Clear Deleted flag for rows specified by zero-based indices in the full sales list.
-    
-    Args:
-        indices: List of 0-based indices from 'list_sales(include_deleted=True)'.
-        
-    Returns:
-        Number of rows updated.
-    """
-    try:
-        full = list_sales(include_deleted=True)
-        ids = [
-            row['id'] for i, row in enumerate(full)
-            if 0 <= i < len(full) and 'id' in row and i in indices
-        ]
-        if not ids:
-            return 0
-        with get_cursor() as (conn, cur):
-            q = f"UPDATE sales SET deleted=0 WHERE id IN ({','.join(['?']*len(ids))})"
-            cur.execute(q, tuple(ids))
-            return cur.rowcount or 0
-    except Exception as e:
-        logger.error(f"Error in undelete_sales_by_indices: {e}")
-        return 0
+
 
 
 def undelete_sales_by_ids(ids: list[int]) -> int:
@@ -269,24 +245,40 @@ def update_sale(sale_id: int, changes: dict[str, Any]) -> bool:
         logger.error(f"Error in update_sale: {e}")
         return False
 
-def get_allocations_by_sale_id(sale_id: int) -> list[dict[str, Any]]:
+
+
+
+
+def get_allocations_for_sales(sale_ids: list[int]) -> dict[int, list[dict[str, Any]]]:
     """
-    Fetch batch allocations for a given sale_id.
+    Fetch batch allocations for multiple sale_ids in one query.
+    Returns a dict mapping sale_id -> list of allocations.
     """
+    if not sale_ids:
+        return {}
     try:
         with get_cursor() as (conn, cur):
-            cur.execute('''
+            placeholders = ','.join(['?'] * len(sale_ids))
+            query = f'''
                 SELECT sba.*, ib.supplier, ib.batch_date
                 FROM sale_batch_allocations sba
                 LEFT JOIN import_batches ib ON sba.batch_id = ib.id
-                WHERE sba.sale_id = ? AND (sba.deleted IS NULL OR sba.deleted = 0)
-                ORDER BY sba.id
-            ''', (sale_id,))
+                WHERE sba.sale_id IN ({placeholders}) AND (sba.deleted IS NULL OR sba.deleted = 0)
+                ORDER BY sba.sale_id, sba.id
+            '''
+            cur.execute(query, list(sale_ids))
             rows = [dict(r) for r in cur.fetchall()]
-            return rows
+            
+            result = {}
+            for r in rows:
+                sid = r['sale_id']
+                if sid not in result:
+                    result[sid] = []
+                result[sid].append(r)
+            return result
     except Exception as e:
-        logger.error(f"Error in get_allocations_by_sale_id: {e}")
-        return []
+        logger.error(f"Error in get_allocations_for_sales: {e}")
+        return {}
 
 
 def delete_sale_allocation(allocation_id: int) -> bool:

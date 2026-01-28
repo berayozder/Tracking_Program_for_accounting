@@ -90,7 +90,6 @@ try:
                             overwrite_sales,
                             get_distinct_sale_platforms,
                             undelete_sales_by_ids,
-                            undelete_sales_by_indices,
                             mark_sale_deleted,
                             update_sale)
 except Exception:
@@ -99,11 +98,10 @@ except Exception:
     overwrite_sales = None  # type: ignore
     get_distinct_sale_platforms = None  # type: ignore
     undelete_sales_by_ids = None  # type: ignore
-    undelete_sales_by_indices = None  # type: ignore
     mark_sale_deleted = None  # type: ignore
     update_sale = None  # type: ignore
 else:
-    __all__.extend(["list_sales","add_sale","overwrite_sales","get_distinct_sale_platforms","undelete_sales_by_ids","undelete_sales_by_indices","mark_sale_deleted","update_sale"])
+    __all__.extend(["list_sales","add_sale","overwrite_sales","get_distinct_sale_platforms","undelete_sales_by_ids","mark_sale_deleted","update_sale"])
 
 try: 
     from .schema import init_db_schema,add_column_if_missing
@@ -205,7 +203,6 @@ try:
                             get_available_batches,
                             allocate_sale_to_batches,
                             backfill_allocation_unit_costs,
-                            undelete_allocation,
                             get_sale_batch_info, 
                             handle_return_batch_allocation,
                             migrate_existing_imports_to_batches,recompute_import_batches)
@@ -222,12 +219,11 @@ except Exception as e:
     get_available_batches = None  # type: ignore
     allocate_sale_to_batches = None  # type: ignore
     backfill_allocation_unit_costs = None  # type: ignore
-    undelete_allocation = None  # type: ignore
     get_sale_batch_info = None  # type: ignore
     handle_return_batch_allocation = None  # type: ignore
     migrate_existing_imports_to_batches = None  # type: ignore
 else:
-    __all__.extend(["add_import","create_import_batch","get_imports","get_imports_with_lines","edit_import","delete_import","undelete_import","get_available_batches","allocate_sale_to_batches","backfill_allocation_unit_costs","undelete_allocation","get_sale_batch_info","handle_return_batch_allocation","migrate_existing_imports_to_batches","recompute_import_batches"])
+    __all__.extend(["add_import","create_import_batch","get_imports","get_imports_with_lines","edit_import","delete_import","undelete_import","get_available_batches","allocate_sale_to_batches","backfill_allocation_unit_costs","get_sale_batch_info","handle_return_batch_allocation","migrate_existing_imports_to_batches","recompute_import_batches"])
 
 
 # Analytics helpers (export safe wrappers so callers can use db.<name>)
