@@ -434,7 +434,7 @@ def open_view_sales_window(root: tk.Tk):
         stripe_treeview(tree)
         try:
             tree.tag_configure('returned', background='#fff9e6', foreground='#8a6d00', font=('', 9, 'bold'))
-            tree.tag_configure('allocation', foreground='#555555', font=('', 9, 'italic'))
+            tree.tag_configure('allocation', foreground='#000000', font=('', 9, 'italic'))
         except Exception:
             pass
             

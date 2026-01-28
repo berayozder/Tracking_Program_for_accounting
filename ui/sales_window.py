@@ -707,7 +707,7 @@ def open_sales_window(root):
                 messagebox.showerror('Error', f'Failed to set/generate product codes: {e}')
                 return
         # =====================================================================================
-        # SAVE SALE FIRST (to get ID)
+        # SAVE SALE (One Master Record)
         # =====================================================================================
         # VAT (KDV) fields
         try:
@@ -716,27 +716,32 @@ def open_sales_window(root):
             messagebox.showerror('Invalid VAT', 'KDV Oranı geçerli bir sayı olmalı (örn: 18)')
             return
         kdv_dahil = bool(kdv_dahil_var.get())
-        # Compute VAT amount for this unit
+        
+        # Calculate Totals
+        total_selling_price = unit * count
         from core.vat_utils import compute_vat
-        # For single unit VAT calculation
-        net_unit, vat_amt_unit = compute_vat(unit, vat_rate, kdv_dahil)
+        net_total, vat_amt_total = compute_vat(total_selling_price, vat_rate, kdv_dahil)
 
-        # Convert entered unit price to base currency using selected sale currency
+        # Convert unit price to base/USD
         from_ccy = (sale_ccy_var.get() or 'TRY').upper()
         base_ccy = db.get_base_currency()
         unit_in_base = unit
         if from_ccy != (base_ccy or '').upper():
             try:
-                conv = db.convert_amount(d, unit, from_ccy, base_ccy)
-                if conv is not None:
-                    unit_in_base = conv
-            except Exception:
                 # If valid fx was entered manually
                 if fx and fx > 0:
                     unit_in_base = unit / fx
+                else:
+                    conv = db.convert_amount(d, unit, from_ccy, base_ccy)
+                    if conv is not None:
+                        unit_in_base = conv
+            except Exception:
                 pass
         
-        # Calculate USD unit price for storage
+        # Calculate Base/USD totals
+        total_in_base = unit_in_base * count
+        
+        # Calculate USD unit price for storage (SellingPriceBase usually implies Base/USD)
         try:
             if fx and fx > 0:
                 usd_unit = unit / fx
@@ -744,38 +749,41 @@ def open_sales_window(root):
                 usd_unit = unit_in_base
         except Exception:
              usd_unit = unit_in_base
+        total_usd = usd_unit * count
 
-        sale_ids_map = {} # pid -> sale_id
+        # Join product IDs for display in the main row
+        master_product_id_str = ",".join(product_ids)
+        # Truncate if excessively long (optional, but sqlite TEXT can handle it)
 
-        for pid in product_ids:
-            new_sale_id = _save_sale_to_db({
-                'Date': d,
-                'Category': cat,
-                'Subcategory': sub,
-                'Quantity': 1,
-                'SellingPrice': unit,
-                'SaleCurrency': (sale_ccy_var.get() or ''),
-                'Platform': platform,
-                'ProductID': pid,
-                'CustomerID': customer_id,
-                'DocumentPath': '',
-                'FXToBase': fx,
-                'SellingPriceBase': usd_unit,
-                'vat_rate': vat_rate,
-                'vat_amount': vat_amt_unit,
-                'is_vat_inclusive': 1 if kdv_dahil else 0,
-            })
-            if new_sale_id:
-                sale_ids_map[pid] = new_sale_id
+        new_sale_id = _save_sale_to_db({
+            'Date': d,
+            'Category': cat,
+            'Subcategory': sub,
+            'Quantity': count,
+            'SellingPrice': total_selling_price,
+            'SaleCurrency': (sale_ccy_var.get() or ''),
+            'Platform': platform,
+            'ProductID': master_product_id_str, # Stores all IDs
+            'CustomerID': customer_id,
+            'DocumentPath': '',
+            'FXToBase': fx,
+            'SellingPriceBase': total_usd,
+            'vat_rate': vat_rate,
+            'vat_amount': vat_amt_total,
+            'is_vat_inclusive': 1 if kdv_dahil else 0,
+        })
         
+        if not new_sale_id:
+            messagebox.showerror('Error', 'Failed to save sale record.')
+            return
+
         # =====================================================================================
         # BATCH TRACKING: Allocate each sold item to batches using FIFO for cost tracking
         # =====================================================================================
         batch_allocations = []
         for pid in product_ids:
-            s_id = sale_ids_map.get(pid)
-            # Allocate this individual item (quantity=1) to batches
-            allocations = db.allocate_sale_to_batches(pid, d, cat, sub, 1, unit_in_base, sale_id=s_id)
+            # Allocate this individual item (quantity=1) to batches, linked to the Master Sale ID
+            allocations = db.allocate_sale_to_batches(pid, d, cat, sub, 1, unit_in_base, sale_id=new_sale_id)
             batch_allocations.extend(allocations)
 
         # Apply inventory reduction after saving sale (batch system handles this automatically)
